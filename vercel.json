@@ -11,11 +11,5 @@
       "path": "/api/cron/sync-mining",
       "schedule": "0 6 * * *"
     }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py"
-    }
   ]
 }
