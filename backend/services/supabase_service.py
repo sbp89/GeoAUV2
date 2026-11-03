@@ -1,5 +1,5 @@
 """
-Cliente REST PostgREST para Persistencia Geocientífica en Supabase — GeoAUV2
+Cliente REST PostgREST para Persistencia Geocientífica en Supabase — GeoAuV2
 Opera exclusivamente mediante variables de entorno (`SUPABASE_URL`, `SUPABASE_KEY`) y respeta RLS.
 """
 from typing import Any, Dict, List

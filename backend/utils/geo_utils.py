@@ -1,5 +1,5 @@
 """
-Utilidades Geoespaciales Métricas para GeoAUV2
+Utilidades Geoespaciales Métricas para GeoAuV2
 """
 import math
 from typing import List, Dict, Any

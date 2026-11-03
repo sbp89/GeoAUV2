@@ -1,8 +1,7 @@
 """
-Normalización Robusta por Percentiles y Estadística Descriptiva — GeoAUV2
-Basado en MineralExplorationAI/core/normalize.py (M.Sc. Edwin Calle Condori)
+Normalización Robusta por Percentiles y Estadística Descriptiva — GeoAuV2
 """
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Tuple
 import numpy as np
 
 

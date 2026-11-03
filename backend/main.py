@@ -1,7 +1,6 @@
 """
-Servidor Principal FastAPI — GeoAUV2 (GeoMineral AI v2 Web Platform)
-Orquesta el flujo completo de 9 pasos de exploración mineral multisensor con IA,
-servicios oficiales SGC/ANM, magnetometría 2D/3D, exportador GEE y persistencia en Supabase.
+Servidor Principal FastAPI — GeoAuV2
+Plataforma Inteligente de Prospección Aurífera Multisensor, IA Geocientífica, Geofísica 3D y Catastro Minero.
 """
 from concurrent.futures import ThreadPoolExecutor
 import datetime
@@ -30,14 +29,17 @@ from backend.core.indices import (
     apply_mask_to_indices,
     build_environmental_mask,
     compute_all_indices,
+    render_alluvial_placer_png_b64,
     render_categorical_png_b64,
+    render_gold_classic_glow_png_b64,
+    render_gold_hotspots_png_b64,
     render_rgb_composite_b64,
     render_scalar_png_b64,
 )
 from backend.core.ml_engine import (
-    cosine_similarity_alpha_earth,
+    cosine_similarity_spectral,
     kmeans_classify_stack,
-    supervised_classify_dzetsaka,
+    supervised_classify_spectral,
 )
 from backend.core.multisensor_scene import SPECTRAL_WAVELENGTHS_UM, build_multisensor_cube
 from backend.core.normalize import normalize_array
@@ -72,9 +74,9 @@ from backend.utils.geo_utils import bbox_to_geojson_polygon, point_to_bbox
 app = FastAPI(
     title=APP_TITLE,
     description=(
-        "Plataforma web de exploración mineral multisensor (Sentinel-2 + ASTER + Landsat 8/9), "
-        "clasificación supervisada/no supervisada (K-Means++, Random Forest, SVM), magnetometría 3D "
-        "y validación estadística con persistencia en Supabase."
+        "Plataforma web de prospección aurífera multisensor libre de nubes (Sentinel-2 + ASTER + Landsat 8/9), "
+        "clasificación supervisada/no supervisada (K-Means++, Random Forest, RBF-SVM), detección aluvial y de vetas, "
+        "magnetometría 3D, cruce catastral ANM/SGC y validación estadística con persistencia en Supabase."
     ),
     version=APP_VERSION,
 )
@@ -89,6 +91,7 @@ app.add_middleware(
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PUBLIC_DIR = os.path.join(ROOT_DIR, "public")
+ANALYSIS_GRID_SIZE = 88
 
 
 @app.get("/api/health")
@@ -118,8 +121,14 @@ async def api_catalog() -> Dict[str, Any]:
     }
 
 
-def _default_stack_for_sensor(norm_indices: Dict[str, np.ndarray], aster_swir: bool) -> List[str]:
-    if aster_swir and "alunita" in norm_indices:
+def _default_stack_for_sensor(
+    norm_indices: Dict[str, np.ndarray],
+    aster_swir: bool,
+    deposit_model: str = "orogenico_vetas",
+) -> List[str]:
+    if deposit_model == "aluvial_placer":
+        preferred = ["s2_aluvial_turbidez", "s2_feox", "s2_arcilla_cai", "fe3", "cuarzo", "l8_arcilla", "clorita"]
+    elif aster_swir and "alunita" in norm_indices:
         preferred = ["alunita", "caolinita", "sericita", "gossan", "fe3", "cuarzo", "clorita", "s2_arcilla_cai"]
     else:
         preferred = ["s2_arcilla_cai", "s2_feox", "s2_pai", "s2_gossan", "s2_ferroso", "l8_arcilla", "cuarzo"]
@@ -137,7 +146,6 @@ def _downsample_grid(arr: np.ndarray, step: int = 2) -> List[List[float]]:
 
 @app.post("/api/analyze")
 async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
-    # Resolver preset si se indicó
     preset_obj = next((p for p in DISTRICT_PRESETS if p["id"] == req.preset_id), None)
     if req.bbox and len(req.bbox) == 4:
         bbox = [float(x) for x in req.bbox]
@@ -148,12 +156,11 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         center_lon = float(req.lon)
         bbox = point_to_bbox(center_lat, center_lon, size_km=req.roi_size_km)
 
-    roi_name = req.project_name or (preset_obj["name"] if preset_obj else f"ROI_{center_lat:.3f}_{center_lon:.3f}")
+    roi_name = req.project_name or (preset_obj["name"] if preset_obj else f"Cuadrante_{center_lat:.4f}_{center_lon:.4f}")
     is_neg_ctrl = (req.preset_id == "bogota_control") or (
         4.60 <= center_lat <= 4.90 and -74.25 <= center_lon <= -73.98
     )
 
-    # Reunir ocurrencias conocidas del preset + base de datos Supabase
     known_occs: List[Dict[str, Any]] = list(req.known_occurrences or [])
     if not known_occs and preset_obj:
         known_occs.extend(preset_obj.get("known_occurrences", []))
@@ -168,17 +175,15 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
                 "grade_gt": float(d["grade_gt"]) if d.get("grade_gt") is not None else None,
             })
 
-    # Paso 1 & 6a: Consultas concurrentes SGC, ANM y DEM
     with ThreadPoolExecutor(max_workers=3) as pool:
         fut_sgc = pool.submit(SGCService.get_geological_data, bbox, known_occs)
         fut_anm = pool.submit(ANMService.get_cadastre_data, bbox)
-        fut_dem = pool.submit(fetch_or_synthesize_dem, bbox, 72)
+        fut_dem = pool.submit(fetch_or_synthesize_dem, bbox, ANALYSIS_GRID_SIZE)
 
         sgc_metrics, sgc_vectors = fut_sgc.result()
         legal_status, anm_vectors = fut_anm.result()
         dem_arr, dem_source = fut_dem.result()
 
-    # Paso 1b: Cubo Multisensor + Diagnóstico en Cascada
     cube, diagnostics = build_multisensor_cube(
         bbox=bbox,
         sensor_mode=req.sensor_mode,
@@ -186,13 +191,15 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         end_date=req.end_date,
         cloud_cover_max=req.cloud_cover_max,
         sgc_layers=sgc_vectors,
+        sgc_metrics=sgc_metrics,
         known_occurrences=known_occs,
         is_negative_control=is_neg_ctrl,
-        grid_size=72,
+        grid_size=ANALYSIS_GRID_SIZE,
     )
     aster_swir = bool(diagnostics["aster_swir_available"])
+    is_open_ocean = bool(diagnostics.get("is_open_ocean", False))
+    alluvial_active_pct = float(diagnostics.get("alluvial_mining_active_pct", 0.0))
 
-    # Paso 2: Índices Espectrales + Máscaras Ambientales + Normalización P2-P98
     raw_indices = compute_all_indices(cube, sensor_mode=req.sensor_mode, aster_swir_available=aster_swir)
     valid_mask, mask_stats = build_environmental_mask(
         cube=cube,
@@ -215,11 +222,10 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         meta_cat = INDICES_CATALOG.get(k, {"name": k, "sensor": "Multisensor", "formula": "", "group": "General"})
         indices_stats[k] = {**meta_cat, **st}
 
-    # Paso 3: Stack Multibanda para ML
     stack_keys = (
         [k for k in req.selected_stack_keys if k in norm_indices]
         if req.selected_stack_keys
-        else _default_stack_for_sensor(norm_indices, aster_swir)
+        else _default_stack_for_sensor(norm_indices, aster_swir, req.deposit_model)
     )
     h_px, w_px = dem_arr.shape
     stack_info = {
@@ -229,10 +235,9 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         "memory_kb": round((h_px * w_px * len(stack_keys) * 8) / 1024.0, 1),
     }
 
-    # Paso 4: IA / Machine Learning (K-Means++, Random Forest, SVM, y Similitud Coseno AlphaEarth)
     user_samples_dicts = [s.model_dump() for s in (req.training_samples or [])]
     if req.ml_method in ("random_forest", "svm"):
-        cluster_labels, ml_summary = supervised_classify_dzetsaka(
+        cluster_labels, ml_summary = supervised_classify_spectral(
             norm_indices=norm_indices,
             cube=cube,
             bbox=bbox,
@@ -255,15 +260,14 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
             sieve_min_pixels=req.sieve_min_pixels,
         )
 
-    sim_map, alpha_earth_metrics = cosine_similarity_alpha_earth(
+    sim_map, spectral_sim_metrics = cosine_similarity_spectral(
         norm_indices=norm_indices,
         bbox=bbox,
         stack_keys=stack_keys,
         anchors=known_occs,
     )
-    ml_summary["alpha_earth_similarity"] = alpha_earth_metrics
+    ml_summary["spectral_similarity"] = spectral_sim_metrics
 
-    # Paso 5: Favorabilidad Mineral
     favorability_01, active_spec_weights, weight_source = compute_mineral_favorability(
         norm_indices=norm_indices,
         deposit_model=req.deposit_model,
@@ -272,7 +276,6 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         strict_nan=req.strict_nan,
     )
 
-    # Paso 6: Estructural DEM + Prospectividad Integrada
     slope_deg, lineament_01, structural_stats = compute_slope_and_lineaments(dem_arr, bbox)
     iw_dict = req.integrated_weights.model_dump() if req.integrated_weights else None
     prospectivity_01, prosp_summary = compute_integrated_prospectivity(
@@ -283,10 +286,12 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         sgc_metrics=sgc_metrics,
         integrated_weights=iw_dict,
         is_negative_control=is_neg_ctrl,
+        is_open_ocean=is_open_ocean,
+        alluvial_power=cube.get("ALLUVIAL_POWER"),
+        alluvial_active_pct=alluvial_active_pct,
     )
     prosp_summary["structural_stats"] = structural_stats
 
-    # Paso 7: Delineación de Targets Priorizados
     targets, targets_geojson, targets_csv = extract_prioritized_targets(
         prospectivity_01=prospectivity_01,
         bbox=bbox,
@@ -294,9 +299,10 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         min_area_ha=req.min_target_area_ha,
         cluster_labels=cluster_labels,
         clusters_meta=ml_summary.get("clusters", []),
+        anm_vectors=anm_vectors,
+        is_open_ocean=is_open_ocean,
     )
 
-    # Paso 8: Validación Estadística Rigurosa (UTM, OA, Kappa, Ganancia Espacial)
     sgc_dep_feats = sgc_vectors.get("depositos", {}).get("features", [])
     validation = validate_targets_statistically(
         targets=targets,
@@ -307,8 +313,8 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         buffer_m=req.validation_buffer_m,
     )
 
-    # Paso 9: Asesor GeoAI + Scripts GEE
     p1_count = sum(1 for t in targets if t["priority_code"] == "P1")
+    free_targets_count = sum(1 for t in targets if t.get("is_free_area", True))
     geoai_plan = build_geoai_exploration_plan(
         deposit_model=req.deposit_model,
         mpi=prosp_summary["mpi"],
@@ -316,6 +322,7 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         p1_count=p1_count,
         aster_swir_available=aster_swir,
         sgc_metrics=sgc_metrics,
+        is_open_ocean=is_open_ocean,
     )
     gee_default = generate_gee_javascript(
         template_type="multisensor_6modulos",
@@ -328,34 +335,46 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         deposit_model=req.deposit_model,
     )
 
-    # Renderizar capas ráster PNG Base64 para superposición en Leaflet
     clay_key = "alunita" if "alunita" in norm_indices else "s2_arcilla_cai"
     ser_key = "sericita" if "sericita" in norm_indices else ("s2_pai" if "s2_pai" in norm_indices else clay_key)
     fe_key = "fe3" if "fe3" in norm_indices else "s2_feox"
     sil_key = "silice" if "silice" in norm_indices else ("gossan" if "gossan" in norm_indices else "s2_gossan")
 
     raster_overlays = {
-        "rgb_natural_432": render_rgb_composite_b64(cube["S2_B4"], cube["S2_B3"], cube["S2_B2"]),
-        "rgb_infrarrojo_843": render_rgb_composite_b64(cube["S2_B8"], cube["S2_B4"], cube["S2_B3"]),
-        "rgb_swir_12_8a_4": render_rgb_composite_b64(cube["S2_B12"], cube["S2_B8A"], cube["S2_B4"]),
-        "rgb_geologia_12_11_2": render_rgb_composite_b64(cube["S2_B12"], cube["S2_B11"], cube["S2_B2"]),
+        "gold_hotspots": render_gold_hotspots_png_b64(prospectivity_01, cutoff=0.36),
+        "prospectivity_thermal": render_scalar_png_b64(
+            prospectivity_01, cmap_name="thermal_rainbow", alpha_valid=225, transparent_below=0.26
+        ),
+        "prospectivity": render_scalar_png_b64(
+            prospectivity_01, cmap_name="inferno_gold", alpha_valid=230, transparent_below=0.25
+        ),
+        "gold_classic": render_gold_classic_glow_png_b64(prospectivity_01, cutoff=0.30),
+        "alluvial_placer": render_alluvial_placer_png_b64(
+            cube["ALLUVIAL_POWER"], cube["TURBID_WATER"]
+        ),
+        "favorability": render_scalar_png_b64(
+            favorability_01, cmap_name="turbo_alteration", alpha_valid=215, transparent_below=0.24
+        ),
+        "ml_clusters": render_categorical_png_b64(cluster_labels, ml_summary.get("palette", {})),
+        "cosine_similarity": render_scalar_png_b64(sim_map, cmap_name="viridis", transparent_below=0.30),
+        "lineaments": render_scalar_png_b64(lineament_01, cmap_name="viridis", alpha_valid=195, transparent_below=0.22),
+        "idx_arcilla": render_scalar_png_b64(norm_indices[clay_key], cmap_name="turbo_alteration", transparent_below=0.25),
+        "idx_feox": render_scalar_png_b64(norm_indices[fe_key], cmap_name="inferno_gold", transparent_below=0.25),
+        "idx_silice_gossan": render_scalar_png_b64(
+            norm_indices.get(sil_key, norm_indices[fe_key]), cmap_name="viridis", transparent_below=0.25
+        ),
+        "ndvi": render_scalar_png_b64(norm_indices["ndvi"], cmap_name="ndvi_green", alpha_valid=185),
         "rgb_mineralogico": render_rgb_composite_b64(
             np.nan_to_num(norm_indices.get(clay_key, cube["S2_B11"]), nan=0.05),
             np.nan_to_num(norm_indices.get(ser_key, cube["S2_B8A"]), nan=0.05),
             np.nan_to_num(norm_indices.get(fe_key, cube["S2_B4"]), nan=0.05),
         ),
-        "idx_arcilla": render_scalar_png_b64(norm_indices[clay_key], cmap_name="turbo_alteration"),
-        "idx_feox": render_scalar_png_b64(norm_indices[fe_key], cmap_name="inferno_gold"),
-        "idx_silice_gossan": render_scalar_png_b64(norm_indices.get(sil_key, norm_indices[fe_key]), cmap_name="viridis"),
-        "ndvi": render_scalar_png_b64(norm_indices["ndvi"], cmap_name="ndvi_green", alpha_valid=185),
-        "ml_clusters": render_categorical_png_b64(cluster_labels, ml_summary.get("palette", {})),
-        "cosine_similarity": render_scalar_png_b64(sim_map, cmap_name="viridis"),
-        "favorability": render_scalar_png_b64(favorability_01, cmap_name="turbo_alteration"),
-        "lineaments": render_scalar_png_b64(lineament_01, cmap_name="viridis", alpha_valid=190),
-        "prospectivity": render_scalar_png_b64(prospectivity_01, cmap_name="inferno_gold", alpha_valid=225),
+        "rgb_geologia_12_11_2": render_rgb_composite_b64(cube["S2_B12"], cube["S2_B11"], cube["S2_B2"]),
+        "rgb_swir_12_8a_4": render_rgb_composite_b64(cube["S2_B12"], cube["S2_B8A"], cube["S2_B4"]),
+        "rgb_infrarrojo_843": render_rgb_composite_b64(cube["S2_B8"], cube["S2_B4"], cube["S2_B3"]),
+        "rgb_natural_432": render_rgb_composite_b64(cube["S2_B4"], cube["S2_B3"], cube["S2_B2"]),
     }
 
-    # Inspector espectral interactivo (submuestreo 36x36 ligero para respuesta instantánea con cursor)
     spec_bands_grid = {}
     for w_item in SPECTRAL_WAVELENGTHS_UM:
         bname = w_item["band"]
@@ -370,6 +389,8 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         "favorability": _downsample_grid(favorability_01, step=2),
         "clay_index": _downsample_grid(norm_indices[clay_key], step=2),
         "feox_index": _downsample_grid(norm_indices[fe_key], step=2),
+        "alluvial_power": _downsample_grid(cube["ALLUVIAL_POWER"], step=2),
+        "elevation_m": _downsample_grid(dem_arr, step=2),
         "ndvi": _downsample_grid(raw_indices["ndvi"], step=2),
         "cluster_id": cluster_labels[::2, ::2].tolist(),
     }
@@ -377,7 +398,6 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     quad_key = f"{center_lat:.3f}_{center_lon:.3f}_{req.roi_size_km:.1f}km_{req.sensor_mode}_{req.deposit_model}"
 
-    # Persistir corrida y targets en Supabase
     cloud_sync = {"saved": False}
     if req.save_to_cloud:
         run_payload = {
@@ -404,9 +424,12 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
                 "component_scores": prosp_summary["component_scores"],
                 "landis_koch": validation["kappa_interpretation"],
                 "legal_summary": legal_status["status_summary"],
+                "free_targets_count": free_targets_count,
             },
         }
         cloud_sync = SupabaseService.save_analysis_run(run_payload, targets)
+
+    prosp_summary["free_targets_count"] = free_targets_count
 
     response_payload: Dict[str, Any] = {
         "metadata": {
@@ -531,15 +554,15 @@ async def api_cron_sync_mining(
         if authorization != expected:
             raise HTTPException(status_code=401, detail="No autorizado para ejecutar tarea Cron")
 
-    key_districts = [p for p in DISTRICT_PRESETS if p["country"] == "Colombia" and p["id"] != "bogota_control"][:4]
+    key_districts = [p for p in DISTRICT_PRESETS if p["country"] == "Colombia" and p["id"] != "bogota_control"][:5]
     records_to_upsert: List[Dict[str, Any]] = []
 
     for dist in key_districts:
         bbox = point_to_bbox(dist["lat"], dist["lon"], size_km=6.0)
-        legal_st, layers = ANMService.get_cadastre_data(bbox)
+        _, layers = ANMService.get_cadastre_data(bbox)
         for t_feat in layers.get("titulos_vigentes", {}).get("features", [])[:15]:
             props = t_feat.get("properties") or {}
-            exp = str(props.get("CODIGO_EXPEDIENTE") or props.get("NUMERO_EXPEDIENTE") or "").strip()
+            exp = str(props.get("CODIGO_EXPEDIENTE") or props.get("NUMERO_EXPEDIENTE") or props.get("EXPEDIENTE") or "").strip()
             if not exp:
                 continue
             records_to_upsert.append({
@@ -575,7 +598,6 @@ async def api_cron_sync_mining(
     }
 
 
-# Servir archivos estáticos locales cuando se ejecuta directamente con Uvicorn
 if os.path.isdir(PUBLIC_DIR):
     css_dir = os.path.join(PUBLIC_DIR, "css")
     js_dir = os.path.join(PUBLIC_DIR, "js")
@@ -583,6 +605,10 @@ if os.path.isdir(PUBLIC_DIR):
         app.mount("/css", StaticFiles(directory=css_dir), name="css")
     if os.path.isdir(js_dir):
         app.mount("/js", StaticFiles(directory=js_dir), name="js")
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def serve_favicon() -> FileResponse:
+        return FileResponse(os.path.join(PUBLIC_DIR, "favicon.svg"))
 
     @app.get("/", include_in_schema=False)
     async def serve_spa_index() -> FileResponse:

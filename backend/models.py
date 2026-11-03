@@ -1,5 +1,5 @@
 """
-Esquemas Pydantic v2 para los 9 pasos de GeoAUV2 (GeoMineral AI v2)
+Esquemas Pydantic v2 para el Motor de Prospección Aurífera — GeoAuV2
 """
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -72,7 +72,7 @@ class AnalysisRequest(BaseModel):
     custom_spectral_weights: Optional[Dict[str, float]] = None
     integrated_weights: Optional[IntegratedWeights] = None
 
-    # Paso 7 & 8: Targets Priorizados y Validación Estadística
+    # Paso 7 & 8: Blancos Priorizados y Validación Estadística
     target_threshold: float = Field(default=0.68, ge=0.30, le=0.95)
     min_target_area_ha: float = Field(default=1.5, ge=0.1, le=100.0)
     validation_buffer_m: float = Field(default=250.0, ge=50.0, le=2000.0)
@@ -104,21 +104,21 @@ class MagnetometryRequest(BaseModel):
 
 
 class GEEScriptRequest(BaseModel):
-    template_type: str = Field(default="multisensor_6modulos")  # sentinel2_descarga | multisensor_6modulos | dzetsaka_rf_svm
-    roi_name: str = "Area_Exploracion_GeoAUV2"
+    template_type: str = Field(default="multisensor_6modulos")  # sentinel2_descarga | multisensor_6modulos | supervisado_rf_svm
+    roi_name: str = "Area_Exploracion_GeoAuV2"
     bbox: List[float] = Field(default_factory=lambda: [-74.7188, 7.0592, -74.6788, 7.0992])
     start_date: str = "2023-01-01"
     end_date: str = "2026-10-01"
     cloud_cover_max: float = 15.0
     ndvi_threshold: float = 0.45
-    deposit_model: str = "epitermal_as"
+    deposit_model: str = "orogenico_vetas"
 
 
 class ProjectSaveRequest(BaseModel):
     name: str
     district_code: Optional[str] = None
     sensor_mode: str = "multisensor"
-    deposit_model: str = "epitermal_as"
+    deposit_model: str = "orogenico_vetas"
     center_lat: float
     center_lon: float
     roi_size_km: float = 4.0

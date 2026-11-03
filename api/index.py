@@ -1,5 +1,5 @@
 """
-Punto de entrada ASGI Serverless para Vercel — GeoAUV2 (GeoMineral AI v2)
+Punto de entrada ASGI Serverless para Vercel — GeoAuV2
 """
 import os
 import sys

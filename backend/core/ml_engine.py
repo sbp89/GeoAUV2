@@ -1,9 +1,9 @@
 """
-Motor de Inteligencia Artificial y Machine Learning Geocientífico — GeoAUV2
-Integra los 3 paradigmas de clasificación enseñados por M.Sc. Edwin Calle Condori (@eddycc66):
-1. No Supervisado: K-Means++ Estandarizado + Intérprete Geológico Automático de Centroides (GeoMineral AI v2).
-2. Supervisado (Estilo DZetsaka / GEE Cerro Rico): Random Forest & RBF-SVM + Filtro Mayoritario + Sieve + Matriz de Confusión.
-3. Semisupervisado (Estilo AlphaEarth): Similitud Coseno Multibanda + Coherencia Leave-One-Out (LOO) + Discriminación de Fondo.
+Motor de Inteligencia Artificial y Machine Learning Geocientífico — GeoAuV2
+Integra tres paradigmas complementarios de clasificación mineralógica orbital:
+1. No Supervisado: K-Means++ Estandarizado + Intérprete Mineralógico Automático de Centroides Z-Score.
+2. Supervisado: Random Forest & RBF-SVM + Filtro Modal Espacial + Tamizado Sieve + Matriz de Confusión (OA y Kappa).
+3. Semisupervisado: Similitud Coseno Multibanda + Coherencia Leave-One-Out (LOO) + Discriminación sobre Fondo.
 """
 from typing import Any, Dict, List, Tuple
 import numpy as np
@@ -23,7 +23,7 @@ ALTERATION_PALETTE: Dict[int, str] = {
 
 
 def apply_majority_filter_2d(labels: np.ndarray, window_size: int = 3) -> np.ndarray:
-    """Filtro modal (Majority Filter) estilo DZetsaka para suavizar ruido 'sal y pimienta'."""
+    """Filtro modal espacial para eliminar ruido aislado tipo 'sal y pimienta'."""
     win = 5 if window_size >= 5 else 3
 
     def _mode_func(values: np.ndarray) -> float:
@@ -74,8 +74,7 @@ def apply_sieve_filter_2d(labels: np.ndarray, min_pixels: int = 6) -> np.ndarray
 
 def _interpret_centroid_zscores(z_vec: np.ndarray, stack_keys: List[str]) -> Tuple[str, str, str]:
     """
-    Asigna etiqueta geológica e hidrotermal automática según firma z-score del centroide
-    (Portado y enriquecido desde MineralExplorationAI/core/advisor.py).
+    Asigna etiqueta geológica, hidrotermal o aluvial automática según firma z-score del centroide.
     """
     scores = {k: float(z_vec[i]) for i, k in enumerate(stack_keys)}
     peak_z = max(scores.values()) if scores else 0.0
@@ -85,6 +84,7 @@ def _interpret_centroid_zscores(z_vec: np.ndarray, stack_keys: List[str]) -> Tup
     silica = max(scores.get("silice", -9.0), scores.get("cuarzo", -9.0))
     iron = max(scores.get("gossan", -9.0), scores.get("fe3", -9.0), scores.get("s2_feox", -9.0), scores.get("s2_gossan", -9.0))
     prop = max(scores.get("clorita", -9.0), scores.get("mgoh_co3", -9.0), scores.get("calcita", -9.0), scores.get("s2_ferroso", -9.0))
+    alluv = scores.get("s2_aluvial_turbidez", -9.0)
 
     if peak_z < 0.32:
         return "Fondo Litológico / Roca Fresca", "#5d6d7e", "Baja"
@@ -95,6 +95,7 @@ def _interpret_centroid_zscores(z_vec: np.ndarray, stack_keys: List[str]) -> Tup
         (phyllic, "Alteración Fílica (Cuarzo-Sericita)", "#f39c12"),
         (silica, "Silicificación / Núcleo de Cuarzo", "#9b59b6"),
         (iron, "Óxidos de Fe³⁺ / Sombrero Gossan", "#d35400"),
+        (alluv, "Terraza / Grava Aluvial Activa", "#eab308"),
         (prop, "Halo Propilítico (Clorita-Epidota-CO₃)", "#2ecc71"),
     ]
     candidates.sort(key=lambda t: t[0], reverse=True)
@@ -116,7 +117,7 @@ def kmeans_classify_stack(
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Ejecuta K-Means++ con estandarización previa z-score sobre los píxeles válidos comunes del stack
-    e interpreta geológicamente cada clúster.
+    e interpreta geológicamente cada dominio mineralógico.
     """
     keys = [k for k in stack_keys if k in norm_indices]
     if not keys:
@@ -124,13 +125,13 @@ def kmeans_classify_stack(
 
     arrays = [np.asarray(norm_indices[k], dtype=np.float64) for k in keys]
     h, w = arrays[0].shape
-    stack_3d = np.stack(arrays, axis=-1)  # (H, W, B)
+    stack_3d = np.stack(arrays, axis=-1)
     valid_mask = np.all(np.isfinite(stack_3d), axis=-1)
     X_raw = stack_3d[valid_mask]
 
     if X_raw.shape[0] < max(n_clusters * 3, 12):
         labels_2d = np.zeros((h, w), dtype=np.int32)
-        return labels_2d, {"method": "kmeans", "clusters": [], "palette": {}, "stack_keys": keys}
+        return labels_2d, {"method": "K-Means++ Estandarizado GeoAuV2", "clusters": [], "palette": {}, "stack_keys": keys}
 
     means = np.mean(X_raw, axis=0)
     stds = np.where(np.std(X_raw, axis=0) > 1e-8, np.std(X_raw, axis=0), 1.0)
@@ -139,12 +140,11 @@ def kmeans_classify_stack(
     rng = np.random.default_rng(seed)
     k = min(n_clusters, X.shape[0])
 
-    # Inicialización K-Means++ (3 corridas, conservar menor inercia)
     best_inertia = np.inf
     best_labels = None
     best_centroids = None
 
-    for init_run in range(3):
+    for _ in range(3):
         centroids = np.empty((k, X.shape[1]), dtype=np.float64)
         first_idx = int(rng.integers(0, X.shape[0]))
         centroids[0] = X[first_idx]
@@ -217,7 +217,7 @@ def kmeans_classify_stack(
 
     clusters_meta.sort(key=lambda item: max(item["centroid_zscores"].values()), reverse=True)
     return labels_2d, {
-        "method": "K-Means++ Estandarizado (GeoMineral AI v2)",
+        "method": "K-Means++ Estandarizado GeoAuV2",
         "n_clusters": k,
         "inertia": round(best_inertia, 2),
         "stack_keys": keys,
@@ -241,7 +241,7 @@ def _fit_predict_random_forest(
     seed: int = 42,
 ) -> np.ndarray:
     """
-    Bosque Aleatorio (Random Forest) vectorizado en NumPy puro:
+    Bosque Aleatorio (Random Forest) vectorizado en NumPy:
     Entrena `n_trees` árboles de decisión con bootstrap y subespacio aleatorio de bandas (`sqrt(B)`).
     """
     rng = np.random.default_rng(seed)
@@ -337,7 +337,6 @@ def _fit_predict_rbf_svm(
     A = K_train + reg_lambda * np.eye(X_train.shape[0])
     alphas = np.linalg.solve(A, Y)
 
-    # Inferencia por bloques para mantener memoria baja
     preds = np.empty(X_all.shape[0], dtype=np.int32)
     batch = 1024
     for start in range(0, X_all.shape[0], batch):
@@ -354,13 +353,12 @@ def _generate_auto_training_rois(
     cube: Dict[str, np.ndarray],
 ) -> Tuple[np.ndarray, Dict[int, Dict[str, str]]]:
     """
-    Genera polígonos/píxeles semilla de entrenamiento supervisado siguiendo la jerarquía mineralógica
-    de Cerro Rico de Potosí (`machine_learning.js` de @eddycc66) y DZetsaka (GEONORT):
+    Genera píxeles semilla de entrenamiento supervisado siguiendo jerarquía paragenética:
       Clase 1: Argílica Avanzada / Alunita-Sílice
       Clase 2: Alteración Fílica / Cuarzo-Sericita
       Clase 3: Sombrero de Hierro / Gossan (Fe3+)
       Clase 4: Halo Propilítico (Clorita-Epidota)
-      Clase 5: Roca Fresca / Suelo Aluvial Expuesto
+      Clase 5: Roca Fresca / Suelo o Grava Expuesta
       Clase 6: Cobertura Vegetal
     """
     ndvi = norm_indices.get("ndvi", np.zeros_like(cube["S2_B4"]))
@@ -372,7 +370,6 @@ def _generate_auto_training_rois(
     h, w = ndvi.shape
     roi_map = np.zeros((h, w), dtype=np.int32)
 
-    # Semillas de alta pureza espectral (percentiles superiores por clase, con prioridad mineralógica)
     c6 = np.isfinite(ndvi) & (ndvi >= np.nanpercentile(ndvi, 86))
     c5 = np.isfinite(clay) & (clay <= np.nanpercentile(clay, 22)) & (gossan <= np.nanpercentile(gossan, 28)) & (~c6)
     c4 = np.isfinite(prop) & (prop >= np.nanpercentile(prop, 86))
@@ -385,7 +382,7 @@ def _generate_auto_training_rois(
     roi_map[c4] = 4
     roi_map[c3] = 3
     roi_map[c2] = 2
-    roi_map[c1] = 1  # Máxima prioridad al núcleo de alteración
+    roi_map[c1] = 1
 
     classes_info = {
         1: {"name": "Argílica Avanzada (Alunita / Sílice)", "color": "#e74c3c"},
@@ -398,7 +395,7 @@ def _generate_auto_training_rois(
     return roi_map, classes_info
 
 
-def supervised_classify_dzetsaka(
+def supervised_classify_spectral(
     norm_indices: Dict[str, np.ndarray],
     cube: Dict[str, np.ndarray],
     bbox: List[float],
@@ -411,16 +408,15 @@ def supervised_classify_dzetsaka(
     sieve_min_pixels: int = 6,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    Ejecuta clasificación supervisada estilo complemento DZetsaka (QGIS / GEE):
-    - Soporta Random Forest y SVM RBF
-    - Aplica Filtro Mayoritario + Sieve
-    - Calcula Matriz de Confusión, Precisión Global (OA) e Índice Kappa en partición 70/30.
+    Ejecuta clasificación mineralógica supervisada (Random Forest o RBF-SVM):
+    - Incorpora semillas automáticas + ROIs interactivas marcadas en el mapa
+    - Aplica Filtro Mayoritario + Tamizado Sieve
+    - Calcula Matriz de Confusión, Precisión Global (OA) e Índice Kappa en validación 70/30.
     """
     keys = [k for k in stack_keys if k in norm_indices]
     if "ndvi" in norm_indices and "ndvi" not in keys:
         keys = keys + ["ndvi"]
 
-    # Construir stack completo reemplazando NaN puntuales por mediana de banda para cubrir toda la escena en supervisado
     arrays = []
     for k in keys:
         arr = np.asarray(norm_indices[k], dtype=np.float64).copy()
@@ -436,7 +432,6 @@ def supervised_classify_dzetsaka(
 
     roi_map, classes_info = _generate_auto_training_rois(norm_indices, cube)
 
-    # Incorporar muestras dibujadas por el usuario en el mapa (ventana 3x3 alrededor del clic)
     min_lon, min_lat, max_lon, max_lat = bbox
     if user_samples:
         for smp in user_samples:
@@ -457,7 +452,6 @@ def supervised_classify_dzetsaka(
     X_samples = X_full[sample_coords]
     y_samples = roi_map.ravel()[sample_coords]
 
-    # División 70% entrenamiento / 30% validación para Matriz de Confusión
     perm = rng.permutation(len(sample_coords))
     split = max(int(0.70 * len(sample_coords)), len(np.unique(y_samples)) * 2)
     split = min(split, len(sample_coords) - 4)
@@ -469,11 +463,11 @@ def supervised_classify_dzetsaka(
     if classifier == "svm":
         val_preds = _fit_predict_rbf_svm(X_train, y_train, X_val)
         all_preds = _fit_predict_rbf_svm(X_samples, y_samples, X_full)
-        algo_label = "Support Vector Machine (RBF-SVM — Estilo DZetsaka)"
+        algo_label = "Support Vector Machine (RBF-SVM Multiclase GeoAuV2)"
     else:
         val_preds = _fit_predict_random_forest(X_train, y_train, X_val, n_trees=35)
         all_preds = _fit_predict_random_forest(X_samples, y_samples, X_full, n_trees=35)
-        algo_label = "Random Forest (35 Árboles — Estilo DZetsaka / GEE)"
+        algo_label = "Random Forest Mineralógico (35 Árboles GeoAuV2)"
 
     labels_2d = all_preds.reshape(h, w)
     if apply_majority:
@@ -481,7 +475,6 @@ def supervised_classify_dzetsaka(
     if apply_sieve:
         labels_2d = apply_sieve_filter_2d(labels_2d, min_pixels=sieve_min_pixels)
 
-    # Matriz de Confusión, OA y Kappa sobre el conjunto de validación
     active_cids = sorted(list(np.unique(np.concatenate([y_val, val_preds, labels_2d.ravel()]))))
     active_cids = [int(c) for c in active_cids if c > 0]
     cid_to_pos = {c: i for i, c in enumerate(active_cids)}
@@ -539,15 +532,15 @@ def supervised_classify_dzetsaka(
     }
 
 
-def cosine_similarity_alpha_earth(
+def cosine_similarity_spectral(
     norm_indices: Dict[str, np.ndarray],
     bbox: List[float],
     stack_keys: List[str],
     anchors: List[Dict[str, Any]] | None = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    Exploración Semisupervisada por Similitud Coseno y Coherencia Leave-One-Out (LOO)
-    (Implementa la metodología `alpha_earth.js` de M.Sc. Edwin Calle Condori).
+    Exploración Semisupervisada por Similitud Coseno Multibanda y Coherencia Leave-One-Out (LOO)
+    frente a minas u ocurrencias conocidas de referencia.
     """
     keys = [k for k in stack_keys if k in norm_indices]
     arrays = [np.asarray(norm_indices[k], dtype=np.float64) for k in keys]
@@ -568,7 +561,6 @@ def cosine_similarity_alpha_earth(
                 if nrm > 1e-8:
                     anchor_vecs.append(v / nrm)
 
-    # Si no hay anclas válidas dentro del píxel descubierto, tomar los 4 píxeles de mayor firma hidrotermal combinada
     if len(anchor_vecs) < 2 and np.any(valid_mask):
         flat_valid = stack_3d[valid_mask]
         mag = np.mean(flat_valid, axis=1)
@@ -580,13 +572,12 @@ def cosine_similarity_alpha_earth(
                 anchor_vecs.append(v / nrm)
 
     if not anchor_vecs:
-        return np.full((h, w), np.nan), {"loo_mean": 0.0, "discrimination": 0.0, "verdict": "SIN DATOS"}
+        return np.full((h, w), np.nan), {"loo_coherence": 0.0, "discrimination_delta": 0.0, "verdict": "SIN DATOS"}
 
     A = np.stack(anchor_vecs, axis=0)
     mean_dir = np.mean(A, axis=0)
     mean_dir = mean_dir / max(float(np.linalg.norm(mean_dir)), 1e-8)
 
-    # Coherencia Leave-One-Out (LOO) entre puntos ancla
     loo_scores = []
     if len(A) >= 2:
         for i in range(len(A)):
@@ -598,7 +589,6 @@ def cosine_similarity_alpha_earth(
         loo_scores = [1.0]
     loo_mean = float(np.mean(loo_scores))
 
-    # Mapa de similitud coseno en toda la escena
     sim_map = np.full((h, w), np.nan, dtype=np.float64)
     flat_v = stack_3d[valid_mask]
     norms = np.linalg.norm(flat_v, axis=1, keepdims=True)
@@ -610,9 +600,9 @@ def cosine_similarity_alpha_earth(
     bg_mean = float(np.mean(cos_vals))
     disc = loo_mean - bg_mean
     if loo_mean >= 0.85 and disc >= 0.05:
-        verdict = "EXCELENTE — Anclas espectralmente coherentes y alta discriminación sobre el fondo."
+        verdict = "EXCELENTE — Ocurrencias ancla espectralmente coherentes y alta discriminación sobre el fondo."
     elif loo_mean >= 0.72:
-        verdict = "BUENO — Coherencia aceptable entre ocurrencias conocidas."
+        verdict = "BUENO — Coherencia consistente entre ocurrencias auríferas de referencia."
     else:
         verdict = "MODERADO — Múltiples estilos de alteración en las anclas; revisar separación por dominio."
 

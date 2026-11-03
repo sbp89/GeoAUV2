@@ -1,6 +1,7 @@
 """
-Servicio de Consulta Oficial al Servicio Geológico Colombiano (SGC) — GeoAUV2
-Ejecución concurrente con caché en memoria y degradación elegante para regiones internacionales (Bolivia / USA).
+Servicio de Consulta Oficial al Servicio Geológico Colombiano (SGC) — GeoAuV2
+Ejecución concurrente con respaldo multicapa en servidores ArcGIS REST, caché en memoria
+y degradación continua para regiones internacionales.
 """
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -10,11 +11,11 @@ import urllib.parse
 import urllib.request
 
 from backend.config import (
-    SGC_ANOMALIAS_GEOQ_URL,
-    SGC_DEPOSITOS_URL,
-    SGC_FALLAS_URL,
-    SGC_GEOFISICA_LINEAMIENTOS_URL,
-    SGC_LITOLOGIA_URL,
+    SGC_ANOMALIAS_GEOQ_URLS,
+    SGC_DEPOSITOS_URLS,
+    SGC_FALLAS_URLS,
+    SGC_GEOFISICA_LINEAMIENTOS_URLS,
+    SGC_LITOLOGIA_URLS,
 )
 from backend.utils.geo_utils import calculate_distance_km, calculate_line_density
 
@@ -29,17 +30,19 @@ class SGCService:
         return (-82.0 <= center_lon <= -66.5) and (-4.5 <= center_lat <= 13.8)
 
     @staticmethod
-    def _fetch_arcgis_query(endpoint_url: str, bbox: List[float], buffer_deg: float = 0.04, timeout_sec: float = 4.2) -> List[Dict[str, Any]]:
+    def _fetch_arcgis_single(
+        endpoint_url: str,
+        bbox: List[float],
+        buffer_deg: float = 0.04,
+        timeout_sec: float = 3.8,
+    ) -> List[Dict[str, Any]] | None:
         min_lon, min_lat, max_lon, max_lat = bbox
-        cache_key = f"{endpoint_url}:{min_lon:.3f},{min_lat:.3f},{max_lon:.3f},{max_lat:.3f}:{buffer_deg:.3f}"
-        if cache_key in SGCService._query_cache:
-            return SGCService._query_cache[cache_key]
-
         expanded_bbox = f"{min_lon - buffer_deg},{min_lat - buffer_deg},{max_lon + buffer_deg},{max_lat + buffer_deg}"
         params = {
             "geometry": expanded_bbox,
             "geometryType": "esriGeometryEnvelope",
             "inSR": "4326",
+            "outSR": "4326",
             "spatialRel": "esriSpatialRelIntersects",
             "outFields": "*",
             "returnGeometry": "true",
@@ -51,41 +54,63 @@ class SGCService:
 
         try:
             url = f"{endpoint_url}/query?{urllib.parse.urlencode(params)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "GeoAUV2/2.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "GeoAuV2/2.2"})
             with urllib.request.urlopen(req, timeout=timeout_sec, context=ctx) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                feats = data.get("features")
-                if isinstance(feats, list):
-                    SGCService._query_cache[cache_key] = feats
-                    return feats
+                if "error" not in data and isinstance(data.get("features"), list):
+                    return data["features"]
         except Exception:
-            try:
-                params_json = dict(params, f="json")
-                url_json = f"{endpoint_url}/query?{urllib.parse.urlencode(params_json)}"
-                req = urllib.request.Request(url_json, headers={"User-Agent": "GeoAUV2/2.0"})
-                with urllib.request.urlopen(req, timeout=timeout_sec, context=ctx) as resp:
-                    raw = json.loads(resp.read().decode("utf-8"))
-                    features = []
-                    for f_raw in raw.get("features", []):
-                        attrs = f_raw.get("attributes", {})
-                        geom = f_raw.get("geometry", {})
-                        gjson = {}
-                        if "paths" in geom:
-                            gjson = {"type": "MultiLineString", "coordinates": geom["paths"]}
-                        elif "rings" in geom:
-                            gjson = {"type": "Polygon", "coordinates": geom["rings"]}
-                        elif "x" in geom and "y" in geom:
-                            gjson = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
-                        if gjson:
-                            features.append({"type": "Feature", "properties": attrs, "geometry": gjson})
-                    SGCService._query_cache[cache_key] = features
-                    return features
-            except Exception:
-                pass
+            pass
+
+        try:
+            params_json = dict(params, f="json")
+            url_json = f"{endpoint_url}/query?{urllib.parse.urlencode(params_json)}"
+            req = urllib.request.Request(url_json, headers={"User-Agent": "GeoAuV2/2.2"})
+            with urllib.request.urlopen(req, timeout=timeout_sec, context=ctx) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+                if "error" in raw:
+                    return None
+                features: List[Dict[str, Any]] = []
+                for f_raw in raw.get("features", []):
+                    attrs = f_raw.get("attributes") or {}
+                    geom = f_raw.get("geometry") or {}
+                    gjson: Dict[str, Any] = {}
+                    if "paths" in geom:
+                        gjson = {"type": "MultiLineString", "coordinates": geom["paths"]}
+                    elif "rings" in geom:
+                        gjson = {"type": "Polygon", "coordinates": geom["rings"]}
+                    elif "x" in geom and "y" in geom:
+                        gjson = {"type": "Point", "coordinates": [geom["x"], geom["y"]]}
+                    if gjson:
+                        features.append({"type": "Feature", "properties": attrs, "geometry": gjson})
+                return features
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fetch_arcgis_cascade(
+        endpoint_urls: List[str],
+        bbox: List[float],
+        buffer_deg: float = 0.04,
+        timeout_sec: float = 3.8,
+    ) -> List[Dict[str, Any]]:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        cache_key = f"{endpoint_urls[0]}:{min_lon:.3f},{min_lat:.3f},{max_lon:.3f},{max_lat:.3f}:{buffer_deg:.3f}"
+        if cache_key in SGCService._query_cache:
+            return SGCService._query_cache[cache_key]
+
+        for url in endpoint_urls:
+            res = SGCService._fetch_arcgis_single(url, bbox, buffer_deg, timeout_sec)
+            if res is not None:
+                SGCService._query_cache[cache_key] = res
+                return res
         return []
 
     @staticmethod
-    def get_geological_data(bbox: List[float], known_occurrences: List[Dict[str, Any]] | None = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def get_geological_data(
+        bbox: List[float],
+        known_occurrences: List[Dict[str, Any]] | None = None,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         center_lon = 0.5 * (bbox[0] + bbox[2])
         center_lat = 0.5 * (bbox[1] + bbox[3])
 
@@ -93,13 +118,17 @@ class SGCService:
             occ_feats = [
                 {
                     "type": "Feature",
-                    "properties": {"ID_NOM_DEP": o.get("name", "Ocurrencia Referencia"), "MINERAL": o.get("mineral", "Au-Ag")},
+                    "properties": {
+                        "ID_NOM_DEP": o.get("name", "Yacimiento de Referencia"),
+                        "PR_PPAL_1": o.get("mineral", "Au-Ag"),
+                        "CB_AE_CON_": o.get("grade_gt"),
+                    },
                     "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
                 }
                 for o in (known_occurrences or [])
                 if "lat" in o and "lon" in o
             ]
-            nearest_name = known_occurrences[0]["name"] if known_occurrences else "Cinturón Metalogénico Regional"
+            nearest_name = known_occurrences[0]["name"] if known_occurrences else "Faja Metalogénica Regional"
             return (
                 {
                     "fault_count": 2 if known_occurrences else 0,
@@ -110,8 +139,8 @@ class SGCService:
                     "nearest_deposit_km": 0.35 if occ_feats else None,
                     "known_gold_grade_gt": known_occurrences[0].get("grade_gt") if known_occurrences else None,
                     "geochemical_anomaly_present": bool(known_occurrences),
-                    "metallogenic_belt_name": "Provincia Metalogénica Andina / Cordillerana",
-                    "favorable_host_rock": "Domos / Stocks Subvolcánicos y Secuencias Alteradas",
+                    "metallogenic_belt_name": "Provincia Metalogénica Cordillerana",
+                    "favorable_host_rock": "Intrusivos Subvolcánicos y Secuencias Alteradas",
                     "magnetic_lineament_count": 2 if known_occurrences else 0,
                     "magnetic_lineament_density": 0.36 if known_occurrences else 0.0,
                     "alluvial_geology_present": False,
@@ -128,25 +157,36 @@ class SGCService:
             )
 
         with ThreadPoolExecutor(max_workers=5) as ex:
-            f_fallas = ex.submit(SGCService._fetch_arcgis_query, SGC_FALLAS_URL, bbox, 0.04, 4.2)
-            f_deps = ex.submit(SGCService._fetch_arcgis_query, SGC_DEPOSITOS_URL, bbox, 0.05, 4.2)
-            f_anom = ex.submit(SGCService._fetch_arcgis_query, SGC_ANOMALIAS_GEOQ_URL, bbox, 0.04, 4.2)
-            f_lin = ex.submit(SGCService._fetch_arcgis_query, SGC_GEOFISICA_LINEAMIENTOS_URL, bbox, 0.04, 4.2)
-            f_lito = ex.submit(SGCService._fetch_arcgis_query, SGC_LITOLOGIA_URL, bbox, 0.03, 4.2)
+            f_fallas = ex.submit(SGCService._fetch_arcgis_cascade, SGC_FALLAS_URLS, bbox, 0.04, 3.8)
+            f_deps = ex.submit(SGCService._fetch_arcgis_cascade, SGC_DEPOSITOS_URLS, bbox, 0.05, 3.8)
+            f_anom = ex.submit(SGCService._fetch_arcgis_cascade, SGC_ANOMALIAS_GEOQ_URLS, bbox, 0.04, 3.8)
+            f_lin = ex.submit(SGCService._fetch_arcgis_cascade, SGC_GEOFISICA_LINEAMIENTOS_URLS, bbox, 0.04, 3.8)
+            f_lito = ex.submit(SGCService._fetch_arcgis_cascade, SGC_LITOLOGIA_URLS, bbox, 0.03, 3.8)
 
-            fallas_features = f_fallas.result()
-            depositos_features = f_deps.result()
-            anomalias_features = f_anom.result()
-            lineamientos_features = f_lin.result()
-            litologia_features = f_lito.result()
+            fallas_features = list(f_fallas.result())
+            depositos_features = list(f_deps.result())
+            anomalias_features = list(f_anom.result())
+            lineamientos_features = list(f_lin.result())
+            litologia_features = list(f_lito.result())
 
-        # Fusionar ocurrencias de benchmark si el endpoint remoto tuvo latencia o no devolvió locales
-        if not depositos_features and known_occurrences:
-            for o in known_occurrences:
+        # Integrar ocurrencias certificadas en el área si aún no figuran en la consulta puntual
+        for o in (known_occurrences or []):
+            olat, olon = float(o["lat"]), float(o["lon"])
+            exists = any(
+                len((d.get("geometry") or {}).get("coordinates") or []) >= 2
+                and abs(float(d["geometry"]["coordinates"][1]) - olat) < 0.0025
+                and abs(float(d["geometry"]["coordinates"][0]) - olon) < 0.0025
+                for d in depositos_features
+            )
+            if not exists:
                 depositos_features.append({
                     "type": "Feature",
-                    "properties": {"ID_NOM_DEP": o.get("name"), "CB_AE_CON_": o.get("grade_gt")},
-                    "geometry": {"type": "Point", "coordinates": [o["lon"], o["lat"]]},
+                    "properties": {
+                        "ID_NOM_DEP": o.get("name"),
+                        "PR_PPAL_1": o.get("mineral", "Au"),
+                        "CB_AE_CON_": o.get("grade_gt"),
+                    },
+                    "geometry": {"type": "Point", "coordinates": [olon, olat]},
                 })
 
         fault_count = len(fallas_features)
@@ -177,16 +217,16 @@ class SGCService:
             coords = (dep.get("geometry") or {}).get("coordinates") or []
             p_lat = props.get("WGS84_LAT") or (coords[1] if len(coords) >= 2 else None)
             p_lon = props.get("WGS84_LON") or (coords[0] if len(coords) >= 2 else None)
-            dep_type = str(props.get("CB_D_TIP_D") or "").lower()
-            if any(k in dep_type for k in ("aluvial", "placer", "superficial")):
+            dep_type = str(props.get("CB_D_TIP_D") or props.get("TIPO_DEPOSITO") or "").lower()
+            if any(k in dep_type for k in ("aluvial", "placer", "superficial", "fluvial")):
                 has_alluvial = True
             if p_lat is not None and p_lon is not None:
                 d = calculate_distance_km(center_lat, center_lon, float(p_lat), float(p_lon))
                 if d < min_dep_d:
                     min_dep_d = d
-                    nearest_dep_name = props.get("ID_NOM_DEP") or props.get("ID_NOM") or "Yacimiento SGC"
+                    nearest_dep_name = props.get("ID_NOM_DEP") or props.get("ID_NOM") or "Yacimiento Aurífero SGC"
                     nearest_dep_km = round(d, 2)
-                    host_rock = props.get("R_UNID_GEO") or props.get("R_TIPO_ROC") or "Unidad Ígnea/Metamórfica"
+                    host_rock = props.get("R_UNID_GEO") or props.get("R_TIPO_ROC") or "Unidad Ígnea / Metamórfica"
                     belt_name = props.get("FK_AG_TERR") or "Cinturón Metalogénico Colombiano"
                     if props.get("CB_AE_CON_") is not None:
                         try:
@@ -198,19 +238,25 @@ class SGCService:
         alluvial_unit = None
         for lito in litologia_features:
             props = lito.get("properties") or {}
-            uc = str(props.get("SimboloUC") or "")
-            desc = str(props.get("Descripcion") or "")
-            if any(k in uc for k in ("Q-al", "Q-t", "Q1", "Q2")) or any(k in desc.lower() for k in ("aluvial", "terraza")):
+            uc = str(props.get("SimboloUC") or props.get("SIMBOLO") or "")
+            desc = str(props.get("Descripcion") or props.get("DESCRIPCION") or "")
+            if any(k in uc for k in ("Q-al", "Q-t", "Qal", "N2-Sc", "Q1", "Q2")) or any(
+                k in desc.lower() for k in ("aluvial", "terraza", "llanura aluvial", "fluvial", "gravas")
+            ):
                 alluvial_present = True
-                alluvial_unit = f"{uc}: {desc[:65]}"
+                alluvial_unit = f"{uc}: {desc[:68]}".strip(": ")
                 break
 
         if alluvial_present or has_alluvial:
-            dep_detected = "Mixto (Veta Estructural + Placer Aluvial)" if fault_count > 0 else "Aluvial / Placer Cuaternario"
+            dep_detected = (
+                "Sistema Mixto (Vetas Estructurales + Placeres Aluviales)"
+                if fault_count > 0
+                else "Placer Aluvial / Terraza Cuaternaria Aurífera"
+            )
         elif fault_count > 0 or len(depositos_features) > 0:
-            dep_detected = "Filón / Sistema Hidrotermal Controlado por Fallas"
+            dep_detected = "Filón / Veta Hidrotermal con Control Estructural"
         else:
-            dep_detected = "Fondo Regional / Cobertura Sedimentaria"
+            dep_detected = "Fondo Litológico / Cobertura Sedimentaria"
 
         metrics = {
             "fault_count": fault_count,

@@ -1,17 +1,15 @@
 """
-Motor de Índices Espectrales Multisensor, Máscaras y Renderizado Científico — GeoAUV2
-Implementa fielmente las ecuaciones corregidas de GeoMineral AI v2 (INDICES.md) y tutoriales GEONORT:
-- División segura sdiv(num, den) con umbral |den| <= 1e-6 -> NaN (sin distorsión +0.001)
-- 15 Índices ASTER v2 (VNIR + SWIR + TIR)
-- 9 Índices Sentinel-2 MSI (10m-20m)
-- 3 Índices Landsat 8/9 OLI Collection 2
-- 6 Compuestos RGB multisensor
+Motor de Índices Espectrales Multisensor, Máscaras Ambientales y Renderizado Cartográfico — GeoAuV2
+- División segura sdiv(num, den) con umbral |den| <= 1e-6 -> NaN sin sesgos aditivos.
+- 15 Índices ASTER (VNIR + SWIR + TIR), 9 Índices Sentinel-2 MSI (10m-20m) y 3 Índices Landsat 8/9 OLI.
+- Renderizadores RGBA de ultra-contraste con transparencia selectiva de fondo estéril e isolíneas auríferas.
 """
 import base64
 import io
-from typing import Dict, Any, Tuple
+from typing import Dict, Tuple
 import numpy as np
 from PIL import Image
+from scipy.ndimage import gaussian_filter
 
 
 EPS = 1e-6
@@ -28,7 +26,7 @@ def sdiv(num: np.ndarray, den: np.ndarray) -> np.ndarray:
 
 
 INDICES_CATALOG: Dict[str, Dict[str, str]] = {
-    # --- ASTER v2 (15 índices corregidos) ---
+    # --- ASTER (15 índices minerales) ---
     "alunita": {
         "name": "Índice de Alunita (ALI)",
         "sensor": "ASTER SWIR",
@@ -214,7 +212,7 @@ INDICES_CATALOG: Dict[str, Dict[str, str]] = {
         "mineral": "Arcillas Hidrotermales 30m",
     },
     "l8_hidrotermal": {
-        "name": "Compuesto Hidrotermal Abrams Landsat",
+        "name": "Compuesto Hidrotermal Landsat",
         "sensor": "Landsat 8/9 OLI",
         "formula": "(SR_B6 / SR_B7) * (SR_B4 / SR_B2)",
         "group": "Respaldo Regional 30m",
@@ -231,7 +229,6 @@ def compute_all_indices(
     """Calcula el conjunto completo de índices espectrales según los sensores disponibles."""
     idx: Dict[str, np.ndarray] = {}
 
-    # Sentinel-2
     b2 = cube["S2_B2"]
     b3 = cube["S2_B3"]
     b4 = cube["S2_B4"]
@@ -252,13 +249,11 @@ def compute_all_indices(
         idx["s2_gossan"] = sdiv(b11, b4) * sdiv(b4, b2)
         idx["s2_aluvial_turbidez"] = sdiv(b4 + b11, b2 + b8)
 
-    # Landsat 8/9
     if sensor_mode == "multisensor" and "L8_B2" in cube:
         idx["l8_feox"] = sdiv(cube["L8_B4"], cube["L8_B2"])
         idx["l8_arcilla"] = sdiv(cube["L8_B6"], cube["L8_B7"])
         idx["l8_hidrotermal"] = idx["l8_arcilla"] * idx["l8_feox"]
 
-    # ASTER VNIR + SWIR + TIR
     if sensor_mode in ("multisensor", "aster") and "AST_B1" in cube:
         ab1, ab2, ab3 = cube["AST_B1"], cube["AST_B2"], cube["AST_B3"]
         idx["fe3"] = sdiv(ab2, ab1)
@@ -299,7 +294,7 @@ def build_environmental_mask(
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     """
     Construye máscara booleana de píxeles válidos para exploración mineral:
-    True = roca/suelo analizable; False = enmascarado por vegetación densa, agua o sombra.
+    True = roca/suelo/grava analizable; False = enmascarado por vegetación densa, agua o sombra.
     """
     ndvi = indices["ndvi"]
     ndwi = indices["ndwi"]
@@ -311,7 +306,6 @@ def build_environmental_mask(
 
     valid_mask = ~(veg_masked | water_masked | shadow_masked) & np.isfinite(ndvi)
 
-    # Salvaguarda de cascada: si la máscara elimina >92% del ROI tropical, relajar umbral NDVI suavemente
     total = max(valid_mask.size, 1)
     if np.sum(valid_mask) / total < 0.08 and mask_vegetation:
         relaxed_veg = ndvi > min(0.78, ndvi_threshold + 0.22)
@@ -344,16 +338,23 @@ def apply_mask_to_indices(
     return masked
 
 
-# Paletas científicas vectorizadas [0..1] -> RGB
 COLORMAPS: Dict[str, np.ndarray] = {
     "inferno_gold": np.array([
-        [18, 14, 36],
-        [68, 22, 84],
-        [142, 36, 92],
-        [208, 72, 48],
-        [243, 156, 18],
-        [255, 225, 86],
-        [255, 252, 204],
+        [20, 14, 40],
+        [85, 25, 118],
+        [180, 45, 115],
+        [240, 105, 38],
+        [255, 195, 28],
+        [255, 238, 110],
+        [255, 253, 215],
+    ], dtype=np.float64),
+    "thermal_rainbow": np.array([
+        [6, 182, 212],
+        [34, 197, 94],
+        [234, 179, 8],
+        [249, 115, 22],
+        [244, 63, 94],
+        [255, 235, 160],
     ], dtype=np.float64),
     "turbo_alteration": np.array([
         [24, 52, 128],
@@ -372,45 +373,171 @@ COLORMAPS: Dict[str, np.ndarray] = {
         [253, 231, 37],
     ], dtype=np.float64),
     "ndvi_green": np.array([
-        [139, 90, 43],
-        [210, 180, 110],
-        [168, 214, 92],
-        [58, 168, 62],
-        [14, 98, 34],
+        [220, 68, 52],
+        [234, 179, 8],
+        [132, 204, 22],
+        [34, 168, 68],
+        [16, 102, 42],
     ], dtype=np.float64),
 }
+
+
+def _rgba_to_b64_png(rgba: np.ndarray) -> str:
+    img = Image.fromarray(rgba, mode="RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _upscale_scalar_smooth(arr_01: np.ndarray, upscale_to: int = 320) -> Tuple[np.ndarray, np.ndarray]:
+    """Remuestrea de forma bicúbica preservando bordes de máscara NaN para evitar aspecto pixelado."""
+    data = np.asarray(arr_01, dtype=np.float64)
+    valid = np.isfinite(data)
+    if not np.any(valid):
+        return np.zeros((upscale_to, upscale_to), dtype=np.float64), np.zeros((upscale_to, upscale_to), dtype=bool)
+
+    med = float(np.nanmedian(data))
+    filled = np.where(valid, data, med).astype(np.float32)
+    mask_f = valid.astype(np.float32)
+
+    val_up = np.asarray(
+        Image.fromarray(filled, mode="F").resize((upscale_to, upscale_to), Image.Resampling.BICUBIC),
+        dtype=np.float64,
+    )
+    msk_up = np.asarray(
+        Image.fromarray(mask_f, mode="F").resize((upscale_to, upscale_to), Image.Resampling.BILINEAR),
+        dtype=np.float64,
+    )
+    return np.clip(val_up, 0.0, 1.0), (msk_up >= 0.45)
 
 
 def render_scalar_png_b64(
     arr_01: np.ndarray,
     cmap_name: str = "inferno_gold",
-    alpha_valid: int = 210,
-    upscale_to: int = 256,
+    alpha_valid: int = 215,
+    upscale_to: int = 320,
+    transparent_below: float = 0.22,
 ) -> str:
-    """Convierte una matriz normalizada [0, 1] con soporte NaN a Data URI PNG RGBA."""
-    data = np.asarray(arr_01, dtype=np.float64)
-    h, w = data.shape
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    valid = np.isfinite(data)
-    if np.any(valid):
+    """
+    Convierte una matriz normalizada [0, 1] con soporte NaN a Data URI PNG RGBA de alta definición,
+    dejando transparente el fondo estéril bajo `transparent_below` para no oscurecer la imagen satelital.
+    """
+    val_up, valid = _upscale_scalar_smooth(arr_01, upscale_to=upscale_to)
+    rgba = np.zeros((upscale_to, upscale_to, 4), dtype=np.uint8)
+
+    if cmap_name == "ndvi_green":
+        transparent_below = -1.0
+
+    active = valid & (val_up >= transparent_below)
+    if np.any(active):
         stops = COLORMAPS.get(cmap_name, COLORMAPS["inferno_gold"])
         n_stops = len(stops)
-        scaled = np.clip(data[valid], 0.0, 1.0) * (n_stops - 1)
+        scaled = np.clip(val_up[active], 0.0, 1.0) * (n_stops - 1)
         idx0 = np.floor(scaled).astype(int)
         idx1 = np.minimum(idx0 + 1, n_stops - 1)
         frac = (scaled - idx0)[:, None]
         rgb = stops[idx0] * (1.0 - frac) + stops[idx1] * frac
-        rgba[valid, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
-        # Mayor opacidad para anomalías intensas
-        dyn_alpha = np.clip(115 + data[valid] * (alpha_valid - 95), 95, 238).astype(np.uint8)
-        rgba[valid, 3] = dyn_alpha
+        rgba[active, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
 
-    img = Image.fromarray(rgba, mode="RGBA")
-    if upscale_to and (h < upscale_to or w < upscale_to):
-        img = img.resize((upscale_to, upscale_to), resample=Image.Resampling.BILINEAR)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        if transparent_below > 0.0:
+            span = max(1.0 - transparent_below, 1e-4)
+            rel = np.clip((val_up[active] - transparent_below) / span, 0.0, 1.0)
+            dyn_alpha = np.clip(np.power(rel, 0.78) * alpha_valid + 22.0, 0.0, 245.0).astype(np.uint8)
+        else:
+            dyn_alpha = np.full(np.sum(active), alpha_valid, dtype=np.uint8)
+        rgba[active, 3] = dyn_alpha
+
+    return _rgba_to_b64_png(rgba)
+
+
+def render_gold_hotspots_png_b64(
+    prospectivity_01: np.ndarray,
+    cutoff: float = 0.36,
+    upscale_to: int = 320,
+) -> str:
+    """
+    Renderizador especializado de Focos y Vetas Auríferas sobre Fondo Satelital Limpio:
+    - Píxeles < cutoff: 100% transparentes (deja ver nítido el relieve satelital, ríos y accesos).
+    - Halo mineralizado (cutoff..0.65): Transición esmeralda -> ámbar translúcido.
+    - Veta / Terraza principal (0.65..0.80): Naranja fuego -> oro intenso.
+    - Núcleo Aurífero (> 0.80): Rojo carmesí / oro incandescente con isolíneas luminosas de contorno.
+    """
+    val_up, valid = _upscale_scalar_smooth(prospectivity_01, upscale_to=upscale_to)
+    val_smooth = gaussian_filter(val_up, sigma=0.8)
+    rgba = np.zeros((upscale_to, upscale_to, 4), dtype=np.uint8)
+
+    xp = [cutoff, 0.48, 0.62, 0.74, 0.85, 0.94, 1.0]
+    r_st = [16, 34, 234, 249, 244, 255, 255]
+    g_st = [185, 197, 179, 115, 48, 215, 252]
+    b_st = [129, 94, 8, 22, 68, 0, 190]
+
+    active = valid & (val_smooth >= cutoff)
+    if np.any(active):
+        v = val_smooth[active]
+        rgba[active, 0] = np.interp(v, xp, r_st).astype(np.uint8)
+        rgba[active, 1] = np.interp(v, xp, g_st).astype(np.uint8)
+        rgba[active, 2] = np.interp(v, xp, b_st).astype(np.uint8)
+
+        rel = np.clip((v - cutoff) / max(1.0 - cutoff, 1e-4), 0.0, 1.0)
+        alpha = np.clip(np.power(rel, 0.72) * 228.0 + 20.0, 0.0, 248.0).astype(np.uint8)
+        rgba[active, 3] = alpha
+
+        # Isolíneas nítidas de contorno en umbrales 0.66 (Veta/Halo Fuerte) y 0.80 (Núcleo P1)
+        gy, gx = np.gradient(val_smooth)
+        grad_mag = np.hypot(gx, gy)
+        iso_66 = valid & (np.abs(val_smooth - 0.66) <= np.maximum(grad_mag * 0.85, 0.005))
+        iso_80 = valid & (np.abs(val_smooth - 0.80) <= np.maximum(grad_mag * 0.95, 0.006))
+
+        rgba[iso_66] = [253, 224, 71, 235]   # Contorno dorado brillante
+        rgba[iso_80] = [255, 255, 240, 252]  # Contorno blanco-oro incandescente
+
+    return _rgba_to_b64_png(rgba)
+
+
+def render_gold_classic_glow_png_b64(
+    prospectivity_01: np.ndarray,
+    cutoff: float = 0.30,
+    upscale_to: int = 320,
+) -> str:
+    """Escala Dorada Clásica (Glow Ámbar -> Oro Brillante) con fondo satelital transparente."""
+    val_up, valid = _upscale_scalar_smooth(prospectivity_01, upscale_to=upscale_to)
+    rgba = np.zeros((upscale_to, upscale_to, 4), dtype=np.uint8)
+    active = valid & (val_up >= cutoff)
+    if np.any(active):
+        v = val_up[active]
+        rel = np.clip((v - cutoff) / max(1.0 - cutoff, 1e-4), 0.0, 1.0)
+        rgba[active, 0] = np.clip(180 + rel * 75, 0, 255).astype(np.uint8)
+        rgba[active, 1] = np.clip(95 + rel * 155, 0, 255).astype(np.uint8)
+        rgba[active, 2] = np.clip(np.where(rel > 0.65, (rel - 0.65) * 420, 12), 0, 255).astype(np.uint8)
+        rgba[active, 3] = np.clip(np.power(rel, 0.82) * 235 + 18, 0, 246).astype(np.uint8)
+    return _rgba_to_b64_png(rgba)
+
+
+def render_alluvial_placer_png_b64(
+    alluvial_power: np.ndarray,
+    turbid_water: np.ndarray,
+    upscale_to: int = 320,
+) -> str:
+    """
+    Visualizador de Placeres Aluviales, Terrazas de Grava (Ámbar/Oro) y Pozas de Lavado con Sedimentos (Cian).
+    """
+    aluv_up, valid = _upscale_scalar_smooth(alluvial_power, upscale_to=upscale_to)
+    turb_up, _ = _upscale_scalar_smooth(turbid_water, upscale_to=upscale_to)
+    rgba = np.zeros((upscale_to, upscale_to, 4), dtype=np.uint8)
+
+    gravel = valid & (aluv_up >= 0.25)
+    if np.any(gravel):
+        v = np.clip((aluv_up[gravel] - 0.25) / 0.75, 0.0, 1.0)
+        rgba[gravel, 0] = np.clip(215 + v * 40, 0, 255).astype(np.uint8)
+        rgba[gravel, 1] = np.clip(140 + v * 95, 0, 255).astype(np.uint8)
+        rgba[gravel, 2] = np.clip(18 + v * 45, 0, 255).astype(np.uint8)
+        rgba[gravel, 3] = np.clip(v * 215 + 35, 0, 240).astype(np.uint8)
+
+    ponds = turb_up >= 0.45
+    if np.any(ponds):
+        rgba[ponds] = [14, 215, 255, 225]
+
+    return _rgba_to_b64_png(rgba)
 
 
 def _stretch_channel_p2_p98(ch: np.ndarray) -> np.ndarray:
@@ -420,7 +547,6 @@ def _stretch_channel_p2_p98(ch: np.ndarray) -> np.ndarray:
     p2, p98 = np.percentile(ch[valid], [2, 98])
     span = max(float(p98 - p2), 1e-6)
     stretched = np.clip((ch - p2) / span, 0.0, 1.0)
-    # Corrección gamma suave para visualización satelital
     stretched = np.power(stretched, 0.88)
     out = np.zeros_like(ch, dtype=np.uint8)
     out[valid] = np.clip(stretched[valid] * 255.0, 0, 255).astype(np.uint8)
@@ -431,10 +557,10 @@ def render_rgb_composite_b64(
     r: np.ndarray,
     g: np.ndarray,
     b: np.ndarray,
-    upscale_to: int = 256,
-    alpha: int = 235,
+    upscale_to: int = 320,
+    alpha: int = 238,
 ) -> str:
-    """Renderiza un compuesto RGB de 3 bandas con estiramiento robusto P2-P98 (siempre visible)."""
+    """Renderiza un compuesto RGB de 3 bandas con estiramiento robusto P2-P98."""
     h, w = r.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
     valid = np.isfinite(r) & np.isfinite(g) & np.isfinite(b)
@@ -445,7 +571,7 @@ def render_rgb_composite_b64(
 
     img = Image.fromarray(rgba, mode="RGBA")
     if upscale_to and (h < upscale_to or w < upscale_to):
-        img = img.resize((upscale_to, upscale_to), resample=Image.Resampling.BILINEAR)
+        img = img.resize((upscale_to, upscale_to), resample=Image.Resampling.BICUBIC)
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
@@ -454,10 +580,14 @@ def render_rgb_composite_b64(
 def render_categorical_png_b64(
     labels: np.ndarray,
     palette: Dict[int, str],
-    upscale_to: int = 256,
+    upscale_to: int = 320,
     alpha: int = 205,
+    transparent_background_classes: Tuple[int, ...] = (0, 6, 7, 8),
 ) -> str:
-    """Renderiza un mapa temático de clases discretas (K-Means / Random Forest / SVM) con bordes nítidos."""
+    """
+    Renderiza un mapa temático de dominios minerales IA con bordes definidos,
+    atenuando las clases de fondo/vegetación para resaltar nítidamente los dominios de alteración.
+    """
     h, w = labels.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
     for cid, hex_col in palette.items():
@@ -471,7 +601,7 @@ def render_categorical_png_b64(
             rgba[mask, 0] = rgb[0]
             rgba[mask, 1] = rgb[1]
             rgba[mask, 2] = rgb[2]
-            rgba[mask, 3] = alpha
+            rgba[mask, 3] = 55 if cid in transparent_background_classes else alpha
 
     img = Image.fromarray(rgba, mode="RGBA")
     if upscale_to and (h < upscale_to or w < upscale_to):

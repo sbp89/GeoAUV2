@@ -1,7 +1,7 @@
 -- ============================================================================
--- GeoAUV2 (GeoMineral AI v2 Web Platform) - Esquema PostgreSQL + RLS Seguro
+-- GeoAuV2 - Esquema PostgreSQL de Prospección Aurífera + RLS Seguro
 -- Proyecto Supabase: srigpcynpkybntclrume
--- Basado en la metodología multisensor de Edwin Calle Condori (@eddycc66)
+-- Motor Multisensor, IA Espectral, Catastro Minero y Geofísica 3D
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public.geoauv2_projects (
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS public.geoauv2_mineral_deposits (
     grade_gt numeric(8,2),
     lat double precision NOT NULL,
     lon double precision NOT NULL,
-    source text NOT NULL DEFAULT 'SGC / GeoAUV2 Benchmark',
+    source text NOT NULL DEFAULT 'SGC / Catálogo GeoAuV2',
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
