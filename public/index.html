@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoAUV2 — GeoMineral AI v2 Plataforma de Exploración Mineral Multisensor</title>
+  <meta name="description" content="Sistema web de exploración mineral multisensor (Sentinel-2, ASTER, Landsat 8/9), clasificación IA supervisada/no supervisada, magnetometría 3D y validación estadística." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <!-- Barra Superior Ejecutiva -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon" aria-hidden="true">Au</div>
+      <div>
+        <div class="brand-title">GeoAUV2 <span class="badge-version">v2.0</span></div>
+        <div class="brand-sub" data-i18n="subtitle">GeoMineral AI · Exploración Multisensor, ML &amp; Magnetometría</div>
+      </div>
+    </div>
+
+    <div class="topbar-controls">
+      <label class="preset-wrap" title="Seleccionar distrito minero de referencia o control negativo">
+        <span data-i18n="district">Distrito:</span>
+        <select id="presetSelect" aria-label="Distrito Minero"></select>
+      </label>
+
+      <button id="btnRunPipeline" class="btn-primary" title="Ejecutar los 9 pasos geocientíficos (Atajo: Ctrl+R)">
+        <span class="pulse-dot"></span>
+        <span data-i18n="run_btn">Analizar Cuadrante (Ctrl+R)</span>
+      </button>
+
+      <button id="btnCloudHistory" class="btn-ghost" title="Ver corridas y proyectos guardados en Supabase">
+        <span>☁ Supabase</span>
+        <span id="cloudStatusDot" class="status-dot offline"></span>
+      </button>
+
+      <button id="btnCompact" class="btn-icon" title="Alternar modo compacto">▤</button>
+      <button id="btnLang" class="btn-icon" title="Cambiar idioma ES / EN">ES</button>
+      <button id="btnTheme" class="btn-icon" title="Cambiar tema Oscuro / Claro">☀</button>
+    </div>
+  </header>
+
+  <!-- Contenedor Principal: Riel de 9 Pasos + Panel Técnico + Visor Cartográfico -->
+  <main class="workspace">
+    <!-- Riel Vertical de los 9 Pasos de GeoMineral AI v2 -->
+    <nav class="step-rail" aria-label="Flujo de 9 pasos GeoMineral AI">
+      <button class="step-btn active" data-step="1" title="Paso 1: Configuración Multisensor y Cascada">
+        <span class="step-num">1</span><span class="step-lbl" data-i18n="s1">Sensores</span>
+      </button>
+      <button class="step-btn" data-step="2" title="Paso 2: Índices Espectrales y Normalización Robusta">
+        <span class="step-num">2</span><span class="step-lbl" data-i18n="s2">Índices</span>
+      </button>
+      <button class="step-btn" data-step="3" title="Paso 3: Stack Multibanda para Machine Learning">
+        <span class="step-num">3</span><span class="step-lbl" data-i18n="s3">Stack ML</span>
+      </button>
+      <button class="step-btn" data-step="4" title="Paso 4: IA Geocientífica (K-Means++, Random Forest, SVM, AlphaEarth)">
+        <span class="step-num">4</span><span class="step-lbl" data-i18n="s4">IA / ML</span>
+      </button>
+      <button class="step-btn" data-step="5" title="Paso 5: Favorabilidad Espectral Mineral">
+        <span class="step-num">5</span><span class="step-lbl" data-i18n="s5">Favorab.</span>
+      </button>
+      <button class="step-btn" data-step="6" title="Paso 6: Prospectividad Integrada, DEM, SGC/ANM y Magnetometría 3D">
+        <span class="step-num">6</span><span class="step-lbl" data-i18n="s6">Integrada</span>
+      </button>
+      <button class="step-btn" data-step="7" title="Paso 7: Delineación de Targets Priorizados P1/P2/P3">
+        <span class="step-num">7</span><span class="step-lbl" data-i18n="s7">Targets</span>
+      </button>
+      <button class="step-btn" data-step="8" title="Paso 8: Validación Estadística (Kappa y Ganancia Espacial)">
+        <span class="step-num">8</span><span class="step-lbl" data-i18n="s8">Validación</span>
+      </button>
+      <button class="step-btn" data-step="9" title="Paso 9: Reporte HTML/PDF, Asesor GeoAI y Scripts GEE">
+        <span class="step-num">9</span><span class="step-lbl" data-i18n="s9">Reportes</span>
+      </button>
+    </nav>
+
+    <!-- Panel Lateral Izquierdo de Configuración y Resultados por Paso -->
+    <aside class="side-panel">
+      <!-- Tarjeta KPI Permanente -->
+      <div class="kpi-strip">
+        <div class="kpi-box">
+          <span class="kpi-title">MPI Global</span>
+          <strong id="kpiMpi" class="kpi-val accent">--</strong>
+          <small id="kpiClass">Esperando análisis</small>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-title">Targets (P1)</span>
+          <strong id="kpiTargets" class="kpi-val">--</strong>
+          <small id="kpiAreaPct">Umbral activo</small>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-title">Kappa / Ganancia</span>
+          <strong id="kpiKappa" class="kpi-val">--</strong>
+          <small id="kpiGain">Validación UTM</small>
+        </div>
+      </div>
+
+      <!-- PASO 1: Sensores, ROI y Diagnóstico en Cascada -->
+      <section class="step-pane active" id="step-1">
+        <div class="pane-header">
+          <h2>1. Configuración Multisensor &amp; ROI</h2>
+          <p>Fusión Sentinel-2 (10-20m) + ASTER (SWIR/TIR) + Landsat 8/9 con diagnóstico en cascada.</p>
+        </div>
+
+        <div class="form-grid-2">
+          <label>Latitud Centro
+            <input type="number" id="inpLat" step="0.0001" value="7.0792" />
+          </label>
+          <label>Longitud Centro
+            <input type="number" id="inpLon" step="0.0001" value="-74.6988" />
+          </label>
+          <label>Tamaño ROI (km)
+            <input type="number" id="inpRoiKm" min="0.5" max="25" step="0.5" value="4.0" />
+          </label>
+          <label>Modo Sensor
+            <select id="inpSensorMode">
+              <option value="multisensor">Multisensor (S2 + ASTER + L8)</option>
+              <option value="sentinel2">Sentinel-2 L2A (Mono-sensor)</option>
+              <option value="aster">ASTER L1T Histórico (14 Bandas)</option>
+            </select>
+          </label>
+          <label>Fecha Inicio
+            <input type="date" id="inpStartDate" value="2020-01-01" />
+          </label>
+          <label>Fecha Fin
+            <input type="date" id="inpEndDate" value="2026-10-31" />
+          </label>
+          <label>Nubosidad Máx (%)
+            <input type="number" id="inpCloudMax" min="0" max="90" step="5" value="20" />
+          </label>
+          <label>Umbral NDVI Veg.
+            <input type="number" id="inpNdviThr" min="0.1" max="0.9" step="0.05" value="0.45" />
+          </label>
+        </div>
+
+        <div class="check-row">
+          <label><input type="checkbox" id="chkMaskVeg" checked /> Máscara Vegetación (NDVI)</label>
+          <label><input type="checkbox" id="chkMaskWater" checked /> Máscara Agua (NDWI)</label>
+          <label><input type="checkbox" id="chkMaskShadow" checked /> Filtro Sombras</label>
+        </div>
+
+        <div class="card-block">
+          <h3>Diagnóstico Multisensor en Cascada</h3>
+          <div id="cascadeBadges" class="badge-row"></div>
+          <ul id="cascadeLogs" class="diag-list">
+            <li>Seleccione un distrito o haga clic en el mapa y presione <strong>Analizar Cuadrante</strong>.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- PASO 2: Índices Espectrales y Normalización Robusta -->
+      <section class="step-pane" id="step-2">
+        <div class="pane-header">
+          <h2>2. Índices Espectrales &amp; Normalización</h2>
+          <p>15 ecuaciones ASTER v2 corregidas (`sdiv` sin `+0.001`) + Sentinel-2 + Landsat.</p>
+        </div>
+
+        <div class="form-grid-2">
+          <label>Método de Normalización
+            <select id="inpNormMethod">
+              <option value="p2_p98">Percentil Robusto P2 – P98 (Recomendado)</option>
+              <option value="p5_p95">Percentil Estricto P5 – P95</option>
+              <option value="minmax">Mínimo – Máximo Lineal</option>
+            </select>
+          </label>
+          <label>Inspeccionar Índice Calculado
+            <select id="selIndexInspect"></select>
+          </label>
+        </div>
+
+        <div class="card-block" id="indexStatCard">
+          <div class="stat-header">
+            <strong id="idxTitle">Índice Espectral</strong>
+            <code id="idxFormula" class="formula-pill">(B7/B5)*(B7/B8)</code>
+          </div>
+          <div class="mini-stats-grid" id="idxMetricsGrid"></div>
+          <canvas id="histCanvas" width="340" height="125" aria-label="Histograma del índice"></canvas>
+        </div>
+      </section>
+
+      <!-- PASO 3: Stack Multibanda ML -->
+      <section class="step-pane" id="step-3">
+        <div class="pane-header">
+          <h2>3. Stack Multibanda para IA</h2>
+          <p>Seleccione los índices normalizados [0–1] que alimentan la clasificación y similitud espectral.</p>
+        </div>
+        <div id="stackMetaBox" class="info-banner">Dimensiones: 72 × 72 px · Seleccione al menos 3 bandas.</div>
+        <div id="stackCheckList" class="stack-checklist"></div>
+      </section>
+
+      <!-- PASO 4: IA / Machine Learning (K-Means++, DZetsaka RF/SVM, AlphaEarth, YOLO) -->
+      <section class="step-pane" id="step-4">
+        <div class="pane-header">
+          <h2>4. Clasificación IA &amp; DZetsaka Web</h2>
+          <p>No supervisado (K-Means++), Supervisado (Random Forest / RBF-SVM + Majority/Sieve) y Similitud AlphaEarth.</p>
+        </div>
+
+        <div class="form-grid-2">
+          <label>Algoritmo Principal
+            <select id="inpMlMethod">
+              <option value="kmeans">K-Means++ Estandarizado + Asesor</option>
+              <option value="random_forest">Random Forest Supervisado (DZetsaka)</option>
+              <option value="svm">Support Vector Machine RBF (DZetsaka)</option>
+            </select>
+          </label>
+          <label>N° Clústeres (K-Means)
+            <input type="number" id="inpClusters" min="3" max="10" value="6" />
+          </label>
+          <label>Ventana Filtro Mayoritario
+            <select id="inpMajorityWin">
+              <option value="3">3 × 3 píxeles (Suave)</option>
+              <option value="5">5 × 5 píxeles (Intenso)</option>
+            </select>
+          </label>
+          <label>Tamizado Sieve (Mín. px)
+            <input type="number" id="inpSievePx" min="1" max="30" value="6" />
+          </label>
+        </div>
+
+        <div class="check-row">
+          <label><input type="checkbox" id="chkMajority" checked /> Filtro Mayoritario (Modal)</label>
+          <label><input type="checkbox" id="chkSieve" checked /> Filtro Sieve (Aislados)</label>
+        </div>
+
+        <!-- Captura interactiva de muestras de entrenamiento estilo DZetsaka -->
+        <div class="card-block">
+          <div class="row-between">
+            <h3>Muestras ROI Supervisadas (DZetsaka)</h3>
+            <button id="btnToggleSampleMode" class="btn-small">🎯 Capturar en Mapa: OFF</button>
+          </div>
+          <div class="form-grid-2" style="margin-top:6px;">
+            <select id="selSampleClass">
+              <option value="1|Argílica Avanzada (Alunita/Sílice)|#e74c3c">1: Argílica Avanzada (Alunita)</option>
+              <option value="2|Alteración Fílica (Cuarzo-Sericita)|#f39c12">2: Fílica (Cuarzo-Sericita)</option>
+              <option value="3|Gossan / Óxidos Fe3+|#d35400">3: Gossan / Óxidos Fe³⁺</option>
+              <option value="4|Halo Propilítico (Clorita)|#2ecc71">4: Propilítico (Clorita-Epidota)</option>
+              <option value="5|Roca Fresca / Suelo|#5d6d7e">5: Roca Fresca / Suelo</option>
+              <option value="6|Cobertura Vegetal|#27ae60">6: Vegetación</option>
+            </select>
+            <button id="btnClearSamples" class="btn-ghost btn-small">Limpiar (<span id="sampleCount">0</span>)</button>
+          </div>
+          <small class="muted-note">Si hay 0 muestras manuales, el motor extrae semillas espectrales automáticas con la jerarquía Cerro Rico (@eddycc66).</small>
+        </div>
+
+        <div class="card-block">
+          <h3>Dominios Clasificados &amp; Coherencia AlphaEarth</h3>
+          <div id="alphaEarthBox" class="info-banner"></div>
+          <div id="mlAccuracyBox"></div>
+          <div id="mlClustersList" class="cluster-list"></div>
+        </div>
+
+        <details class="card-block">
+          <summary><strong>Arquitecturas YOLO para Testigos y Afloramientos (GEONORT)</strong></summary>
+          <div id="yoloCatalogList" class="yolo-list"></div>
+        </details>
+      </section>
+
+      <!-- PASO 5: Favorabilidad Mineral -->
+      <section class="step-pane" id="step-5">
+        <div class="pane-header">
+          <h2>5. Favorabilidad Espectral Mineral</h2>
+          <p>Superposición ponderada normalizada $\sum w_i x_i / \sum w_i$ sin doble re-escalado.</p>
+        </div>
+
+        <label class="full-lbl">Modelo Genético de Yacimiento
+          <select id="inpDepositModel"></select>
+        </label>
+        <p id="depositModelDesc" class="muted-note"></p>
+
+        <div class="check-row">
+          <label><input type="checkbox" id="chkStrictNan" /> Modo Estricto NaN (Exige 100% bandas válidas por píxel)</label>
+        </div>
+
+        <div class="card-block">
+          <h3>Pesos Espectrales Activos</h3>
+          <small id="weightSourceLbl" class="muted-note"></small>
+          <div id="activeWeightsBars" class="bars-list"></div>
+        </div>
+      </section>
+
+      <!-- PASO 6: Prospectividad Integrada + SGC/ANM + Magnetometría 3D -->
+      <section class="step-pane" id="step-6">
+        <div class="pane-header">
+          <h2>6. Prospectividad Integrada, Catastro &amp; Magnetometría</h2>
+          <p>Fusión Espectral + Lineamientos DEM Sobel + SGC + ANM + Vacíos Magnéticos 3D.</p>
+        </div>
+
+        <div class="card-block">
+          <h3>Desglose de Factores (0 – 100)</h3>
+          <div id="componentScoresBars" class="bars-list"></div>
+          <div id="structuralSummaryBox" class="mini-stats-grid" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="card-block">
+          <h3>Geología Oficial SGC &amp; Catastro ANNA Minería</h3>
+          <div id="sgcAnmSummary" class="sgc-box"></div>
+        </div>
+
+        <div class="card-block">
+          <div class="row-between">
+            <h3>Laboratorio de Magnetometría 2D/3D ($B = \sqrt{x^2+y^2+z^2}$)</h3>
+            <button id="btnRunMag" class="btn-small btn-primary-outline">Simular / Calcular µT</button>
+          </div>
+          <p class="muted-note">Detecta <strong>Vacíos Magnéticos Hidrotermales</strong> ("valles azules") por destrucción de magnetita (@eddycc66). Arrastre el gráfico 3D para rotar.</p>
+          <details style="margin:6px 0;">
+            <summary style="cursor:pointer;font-size:12px;color:var(--accent);">Pegar datos CSV propios (lat,lon,bx,by,bz)</summary>
+            <textarea id="txtMagCsv" rows="3" placeholder="7.0790,-74.6990,5.2,24.1,16.8&#10;7.0802,-74.6980,4.8,21.0,14.2"></textarea>
+          </details>
+          <div id="magMetricsBar" class="mini-stats-grid"></div>
+          <canvas id="mag3dCanvas" width="340" height="200" class="mag-canvas" title="Arrastre con el ratón para rotar la superficie magnética 3D"></canvas>
+          <p id="magInterpText" class="muted-note"></p>
+        </div>
+      </section>
+
+      <!-- PASO 7: Targets Priorizados -->
+      <section class="step-pane" id="step-7">
+        <div class="pane-header">
+          <h2>7. Targets de Exploración Priorizados</h2>
+          <p>Extracción de componentes conexos de 8 vecinos, área geodésica (ha) y ranking P1 / P2 / P3.</p>
+        </div>
+
+        <div class="form-grid-2">
+          <label>Umbral Prospectividad
+            <input type="number" id="inpTargetThr" min="0.40" max="0.92" step="0.02" value="0.68" />
+          </label>
+          <label>Área Mínima (ha)
+            <input type="number" id="inpMinAreaHa" min="0.2" max="50" step="0.5" value="1.5" />
+          </label>
+        </div>
+
+        <div class="btn-row">
+          <button id="btnExportGeojson" class="btn-small">⬇ Exportar GeoJSON</button>
+          <button id="btnExportCsv" class="btn-small">⬇ Exportar CSV</button>
+        </div>
+
+        <div id="targetsList" class="targets-list"></div>
+      </section>
+
+      <!-- PASO 8: Validación Estadística -->
+      <section class="step-pane" id="step-8">
+        <div class="pane-header">
+          <h2>8. Validación Estadística Espacial</h2>
+          <p>Distancia métrica en UTM al borde del polígono (`0 m` en interior), Kappa de Cohen y Ganancia Espacial.</p>
+        </div>
+
+        <label class="full-lbl">Buffer Métrico de Captura (m)
+          <input type="number" id="inpValBuffer" min="50" max="1500" step="50" value="250" />
+        </label>
+
+        <div class="card-block">
+          <div id="valLandisBadge" class="info-banner"></div>
+          <div id="valMetricsGrid" class="mini-stats-grid"></div>
+          <h4 style="margin:10px 0 6px;font-size:12px;">Matriz de Confusión Espacial</h4>
+          <div id="valConfusionTable"></div>
+        </div>
+
+        <div class="card-block">
+          <h3>Puntos de Control / Ocurrencias Evaluadas</h3>
+          <div id="valControlPoints" class="control-pts-list"></div>
+        </div>
+      </section>
+
+      <!-- PASO 9: Reportes, Cloud y Google Earth Engine -->
+      <section class="step-pane" id="step-9">
+        <div class="pane-header">
+          <h2>9. Reportes Técnicos, Cloud &amp; Earth Engine</h2>
+          <p>Plan de campo por fases (Asesor GeoAI), informe HTML/PDF, configuración `.geominer` y scripts GEE.</p>
+        </div>
+
+        <div class="btn-row">
+          <button id="btnOpenHtmlReport" class="btn-primary btn-small">📄 Abrir Reporte PDF / HTML</button>
+          <button id="btnSaveCloudProject" class="btn-small">☁ Guardar Proyecto</button>
+          <button id="btnExportGeominer" class="btn-small">⬇ .geominer</button>
+        </div>
+
+        <div class="card-block">
+          <h3>Plan de Exploración por Fases (Asesor GeoAI)</h3>
+          <div id="geoaiPlanBox" class="phases-list"></div>
+        </div>
+
+        <div class="card-block">
+          <h3>Generador Google Earth Engine (GEE — @eddycc66)</h3>
+          <div class="form-grid-2">
+            <select id="selGeeTemplate">
+              <option value="multisensor_6modulos">Multisensor 6 Módulos (S2+ASTER+L8)</option>
+              <option value="sentinel2_descarga">Descarga Sentinel-2 L2A + RGB/SWIR</option>
+              <option value="dzetsaka_rf_svm">Clasificación Supervisada RF + SVM</option>
+            </select>
+            <div class="btn-row" style="margin:0;">
+              <button id="btnCopyGee" class="btn-small">📋 Copiar</button>
+              <button id="btnDownloadGee" class="btn-small">⬇ .js</button>
+            </div>
+          </div>
+          <pre id="geeCodeBox" class="code-box">// Ejecute el análisis para generar el script GEE adaptado a su ROI...</pre>
+        </div>
+      </section>
+    </aside>
+
+    <!-- Visor Cartográfico Central Interactivo -->
+    <section class="map-stage">
+      <!-- Barra Flotante de Capas Ráster y Herramientas -->
+      <div class="map-toolbar">
+        <label class="toolbar-item">
+          <span>Capa Activa:</span>
+          <select id="selRasterLayer">
+            <option value="prospectivity">🔥 Prospectividad Integrada (Paso 6)</option>
+            <option value="favorability">⚡ Favorabilidad Mineral (Paso 5)</option>
+            <option value="ml_clusters">🧠 Clasificación IA / DZetsaka (Paso 4)</option>
+            <option value="cosine_similarity">🎯 Similitud AlphaEarth (Coseno)</option>
+            <option value="rgb_mineralogico">💎 Ternario Mineralógico (Al-OH / Ser / Fe)</option>
+            <option value="rgb_geologia_12_11_2">🪨 Geología Sentinel-2 (B12-B11-B2)</option>
+            <option value="rgb_swir_12_8a_4">🛰 SWIR Exploración (B12-B8A-B4)</option>
+            <option value="rgb_infrarrojo_843">🌿 Falso Color Infrarrojo (B8-B4-B3)</option>
+            <option value="rgb_natural_432">🌍 Color Natural Base (B4-B3-B2)</option>
+            <option value="idx_arcilla">🧪 Índice Arcillas / Alunita</option>
+            <option value="idx_feox">🧱 Índice Óxidos de Hierro Fe³⁺</option>
+            <option value="idx_silice_gossan">⛰ Índice Sílice / Gossan</option>
+            <option value="lineaments">📐 Densidad Lineamientos Sobel DEM</option>
+            <option value="ndvi">🌱 Vegetación NDVI</option>
+            <option value="none">🚫 Ocultar Ráster</option>
+          </select>
+        </label>
+
+        <label class="toolbar-item">
+          <span>Opacidad:</span>
+          <input type="range" id="rngOpacity" min="0" max="100" value="82" />
+        </label>
+
+        <div class="vector-toggles">
+          <label><input type="checkbox" id="chkVecTargets" checked /> Targets</label>
+          <label><input type="checkbox" id="chkVecFallas" checked /> Fallas SGC</label>
+          <label><input type="checkbox" id="chkVecDepositos" checked /> Yacimientos</label>
+          <label><input type="checkbox" id="chkVecAnm" checked /> Catastro ANM</label>
+        </div>
+
+        <button id="btnMeasureDist" class="btn-small" title="Medir distancia lineal entre dos o más puntos">📏 Medir</button>
+      </div>
+
+      <div id="map" role="application" aria-label="Mapa interactivo de exploración mineral"></div>
+
+      <!-- HUD Inferior Derecho: Firma Espectral en Tiempo Real (0.49 - 10.6 µm) -->
+      <div class="spectral-hud" id="spectralHud">
+        <div class="hud-head">
+          <strong>Firma Espectral del Píxel (VNIR–SWIR–TIR)</strong>
+          <span id="hudCoords" class="mono">Mueva el cursor sobre el ROI</span>
+        </div>
+        <canvas id="specCurveCanvas" width="320" height="105"></canvas>
+        <div id="hudReadout" class="hud-metrics">
+          <span>Prosp: <b>--</b></span>
+          <span>Arcilla: <b>--</b></span>
+          <span>FeOx: <b>--</b></span>
+          <span>NDVI: <b>--</b></span>
+        </div>
+      </div>
+
+      <!-- Overlay de Carga -->
+      <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+        <div class="loading-title">Procesando Cubo Multisensor &amp; IA Geocientífica...</div>
+        <div class="loading-sub" id="loadingStepText">Consultando STAC Sentinel-2, ASTER, SGC, ANM y ejecutando ML</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal de Historial y Proyectos en Supabase -->
+  <div id="cloudModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="row-between">
+        <h2>☁ Base de Datos Geocientífica Supabase (`geoauv2_*`)</h2>
+        <button id="btnCloseModal" class="btn-icon">✕</button>
+      </div>
+      <p class="muted-note">Corridas recientes del pipeline de 9 pasos y configuraciones guardadas con Row Level Security (RLS) activo.</p>
+      <div id="cloudRunsTableWrap" class="modal-scroll"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

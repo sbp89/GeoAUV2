@@ -1,0 +1,23 @@
+# Entorno y credenciales
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Vercel y herramientas locales
+.vercel/
+*.log
+.DS_Store
+Thumbs.db
