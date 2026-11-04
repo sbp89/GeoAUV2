@@ -1,19 +1,22 @@
-# GeoAuV2 — Plataforma Inteligente de Prospección Aurífera
+# GeoAuV2 v2.3 — Plataforma Científica de Prefactibilidad y Prospección Aurífera
 
-Plataforma web integral de **Prospección Aurífera Multisensor, Inteligencia Artificial Espectral, Cartografía Satelital Libre de Nubes y Geofísica 3D**, diseñada para la identificación de depósitos de oro primario (vetas orogénicas, sistemas epitermales y pórfidos Au-Cu) y secundario (placeres y terrazas aluviales).
+Plataforma web integral de **Prefactibilidad y Prospección Aurífera Multisensor, Reflectancia Superficial 16-bit Real, Elevación Radar 30 m, Inteligencia Artificial Espectral y Geofísica 3D**, diseñada para estudios de exploración temprana (*Greenfield / Brownfield*) de depósitos de oro primario (vetas orogénicas, sistemas epitermales y pórfidos Au-Cu) y secundario (placeres y terrazas aluviales).
 
 ## Arquitectura y Capacidades Principales
 
-1. **Cartografía Satelital HD Libre de Nubes**:
-   - Mosaicos ópticos actualizados de alta resolución (`Google Satellite HD z20`, `Google Hybrid z20`, `EOX Sentinel-2 Cloudless 2024`, `ESRI World Imagery`, `OpenTopoMap` y `CARTO Dark`).
-   - Capa conmutable de etiquetas territoriales (`CARTO Voyager Labels` + píldoras interactivas de municipios y ríos auríferos) y buscador omnibox con autocompletado local + OpenStreetMap Nominatim + soporte directo de coordenadas decimales y grados-minutos-segundos (`GMS / DMS`).
-   - Síntesis radiométrica en servidor mediante teselas satelitales libres de nubes con cascada multi-anual y rechazo automático de aguas oceánicas abiertas.
+1. **Rigor Radiométrico y Topográfico de Prefactibilidad**:
+   - Ingesta directa en servidor de reflectancia superficial real **Sentinel-2 L2A COG BOA (16-bit)** (`B02..B12` + clasificación de escena `SCL`) mediante lecturas HTTP Range nativas, con mosaico multi-escena para relleno limpio de nubes.
+   - Modelo digital de elevación oficial **Copernicus DEM GLO-30 (`float32`, 30 m)** para cálculo riguroso de pendientes y densidad de lineamientos estructurales.
+   - Separación estricta entre **capas base visuales 8-bit** (`Google Satellite HD z20`, `Google Hybrid z20`, `EOX Sentinel-2 Cloudless 2024`, `ESRI World Imagery`) y el **cubo espectral analítico 16-bit**, respetando físicamente la ventana operativa SWIR histórica de ASTER (`<= 2008-04-28`).
+   - Exclusión automática de techos/infraestructura urbana (`mask_urban`), preservación estricta de evidencia observada (`NaN` bajo bosque denso o nubes sin extrapolar targets falsos), compuerta física de amplitud mineralógica (`P90`) y aislamiento exclusivo del índice `ALLUVIAL_POWER` para el modelo `aluvial_placer` en llanuras (`pendiente <= 9.5°`).
 
-2. **Visualización Avanzada de Depósitos de Oro**:
-   - Capa principal **`🔥 Focos y Vetas de Oro`** con fondo estéril 100% transparente (`< 0.36`), interpolación bicúbica suave (`320×320`) e isocontornos luminosos de alta ley (`0.66` y `0.80`).
-   - Capas especializadas: **`🌡️ Mapa Térmico Au`**, **`🌈 Prospectividad Continua`**, **`🟡 Vetas & Gossan`** y **`🌊 Placeres Aluviales`**.
-   - Pines pulsantes numerados (`🎯 #1 · %`) en el punto exacto de máxima anomalía (`peak_lat`, `peak_lon`), diferenciados de minas de referencia (`🪙`), con estado legal ANM, coordenadas decimales/GMS, copia en 1 clic y enlace directo a Google Maps.
-   - Visor espectral en vivo al pasar el cursor con veredicto geológico instantáneo (`🔥 NÚCLEO AURÍFERO P1`, `🌊 TERRAZA / PLACER ALUVIAL`, `⚡ VETA / HALO HIDROTERMAL`).
+2. **Transparencia Metodológica ("🔬 ¿Qué se está usando?")**:
+   - Auditoría en tiempo real (`methodology_audit`) integrada en la cabecera (`🔬 Qué se usa`), panel ejecutivo, módulos laterales y reporte PDF/HTML imprimible.
+   - Desglose porcentual exacto de cobertura superficial analizada (`Roca/Suelo Expuesto`, `Vegetación Enmascarada`, `Urbano Excluido`, `Agua`, `Nubes/Sombras`), ecuaciones espectrales activas, hiperparámetros de IA y alcance normativo de prefactibilidad.
+
+3. **Visualización Avanzada y Experiencia Móvil / Escritorio**:
+   - Capa principal **`🔥 Focos y Vetas de Oro`** con convolución normalizada sin sangrado de bordes (`NaN`-safe), barra rápida flotante de 1 clic (`#quickLayerBar`) y botón **`👁️ Ver Roca Base`** (*Hold-to-Peek* o tecla `Espacio`) para inspeccionar afloramientos reales bajo la anomalía.
+   - Interfaz responsiva nativa (`100dvh`) para **móviles y tablets** con navegación inferior táctil (`🗺️ Mapa`, `⚙️ Módulos`, `📊 Resumen Au`, `🔬 Qué se usa`) y rotación táctil 3D en magnetometría.
 
 3. **Motor Multisensor (28 Índices Espectrales) y Normalización Robusta**:
    - Integración de **Sentinel-2 L2A** (10–20 m), **ASTER L1T** (VNIR + SWIR histórico pre-2008 + TIR) y **Landsat 8/9 OLI** (30 m).

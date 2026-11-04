@@ -50,6 +50,8 @@ class AnalysisRequest(BaseModel):
     mask_water: bool = True
     ndwi_threshold: float = Field(default=0.15, ge=-0.5, le=0.9)
     mask_shadows: bool = True
+    mask_urban: bool = True
+    strict_evidence_mask: bool = True
 
     # Paso 2: Normalización Robusta
     norm_method: str = Field(default="p2_p98")  # p2_p98 | p5_p95 | minmax

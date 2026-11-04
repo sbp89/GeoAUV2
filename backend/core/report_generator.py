@@ -15,7 +15,21 @@ def build_standalone_html_report(analysis: Dict[str, Any]) -> str:
     targets = analysis.get("targets", [])
     plan = analysis.get("geoai_plan", {})
     ml_info = analysis.get("ml_summary", {})
+    audit = analysis.get("methodology_audit", {})
     comp = prosp.get("component_scores", {})
+
+    rows_sources = ""
+    for src in audit.get("sources_active", []):
+        rows_sources += (
+            f"<tr>"
+            f"<td><strong>{src.get('category', '')}</strong></td>"
+            f"<td>{src.get('name', '')}</td>"
+            f"<td><strong>{src.get('badge', '')}</strong></td>"
+            f"<td>{src.get('detail', '')}</td>"
+            f"</tr>"
+        )
+    surf = audit.get("surface_breakdown", diag.get("mask_stats", {}))
+    scope_info = audit.get("prefeasibility_scope", {})
 
     rows_targets = ""
     for t in targets[:18]:
@@ -107,9 +121,23 @@ def build_standalone_html_report(analysis: Dict[str, Any]) -> str:
   Respuesta Geofísica: <strong>{comp.get('geophysical', 0)}%</strong>
 </p>
 
-<h2>1. Síntesis Ejecutiva y Trazabilidad Multisensor</h2>
+<h2>1. Síntesis Ejecutiva y Trazabilidad Científica de Prefactibilidad</h2>
 <p>{plan.get('executive_narrative', '')}</p>
+<p style="font-size:12.5px;background:#fefce8;border:1px solid #fde047;padding:9px 12px;border-radius:8px;">
+  <strong>Nivel de Evidencia Activo:</strong> {audit.get('data_authenticity_tier', diag.get('data_authenticity_tier', 'Reflectancia Multisensor'))} ·
+  <strong>Roca/Suelo Observable:</strong> {surf.get('valid_rock_soil_pct', 0)}% ·
+  <strong>Bosque Enmascarado:</strong> {surf.get('vegetation_masked_pct', 0)}% ·
+  <strong>Nubes SCL:</strong> {surf.get('cloud_nodata_pct', 0)}% ·
+  <strong>Filtro Urbano:</strong> {surf.get('urban_masked_pct', 0)}%
+</p>
+<table>
+  <thead><tr><th>Componente</th><th>Fuente / Motor en Uso</th><th>Estado</th><th>Especificación Técnica</th></tr></thead>
+  <tbody>{rows_sources or "<tr><td colspan='4'>Consulte los registros de cascada multisensor abajo.</td></tr>"}</tbody>
+</table>
 <ul>{logs_html}</ul>
+<p style="font-size:12px;color:#475569;background:#f8fafc;border-left:3px solid #64748b;padding:8px 12px;">
+  <strong>Alcance Metodológico de Prefactibilidad:</strong> {scope_info.get('disclaimer', 'Los sensores satelitales identifican ensamblajes de alteración hidrotermal, óxidos de hierro, controles morfoestructurales y terrazas aluviales en superficie expuesta. La confirmación de leyes económicas (Au g/t) requiere muestreo geoquímico de roca/canal, ensayo al fuego y perforación diamantina.')}
+</p>
 
 <h2>2. Blancos y Focos Auríferos Priorizados para Verificación en Campo</h2>
 <table>

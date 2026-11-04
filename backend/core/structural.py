@@ -16,14 +16,29 @@ import numpy as np
 from scipy.ndimage import convolve, gaussian_filter, label as nd_label, uniform_filter
 
 from backend.config import OPEN_ELEVATION_URL
+from backend.core.cog_reader import fetch_copernicus_dem_30m_cog
 
 
 def fetch_or_synthesize_dem(bbox: List[float], grid_size: int = 88) -> Tuple[np.ndarray, str]:
     """
-    Obtiene una malla de elevación digital (msnm) combinando muestreo SRTM / Open-Elevation
-    con interpolación bicúbica y micro-relieve estructural realista.
+    Obtiene el Modelo Digital de Elevación (msnm) priorizando el DEM Oficial Copernicus GLO-30 (30 m float32 COG),
+    con respaldo automático a muestreo SRTM / Open-Elevation y relieve calibrado si no hay red disponible.
     """
     min_lon, min_lat, max_lon, max_lat = bbox
+    c_lat = 0.5 * (min_lat + max_lat)
+    c_lon = 0.5 * (min_lon + max_lon)
+
+    # Descarte rápido para océano abierto profundo
+    if (c_lat > 11.55 and c_lon < -71.5) or (c_lon < -78.05 and -2.0 < c_lat < 7.2):
+        return np.zeros((grid_size, grid_size), dtype=np.float64), "Nivel Marino Oceánico (0 msnm)"
+
+    # 1. Prioridad Prefactibilidad: Copernicus DEM Oficial GLO-30 (30 metros reales vía COG HTTP Range)
+    cop_dem = fetch_copernicus_dem_30m_cog(bbox, grid_size=grid_size)
+    if cop_dem is not None:
+        if float(np.max(cop_dem)) <= 1.8 and float(np.std(cop_dem)) < 0.6:
+            return np.maximum(cop_dem, 0.0), "Copernicus DEM Oficial GLO-30 (30 m — Nivel Marino)"
+        return cop_dem, "Copernicus DEM Oficial GLO-30 (Radar 30 m float32)"
+
     seed_hex = hashlib.sha256(f"DEM:{min_lon:.4f},{min_lat:.4f}".encode()).hexdigest()[:8]
     rng = np.random.default_rng(int(seed_hex, 16))
 

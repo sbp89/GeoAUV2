@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 
 APP_NAME = "GeoAuV2"
 APP_TITLE = "GeoAuV2 — Plataforma Inteligente de Prospección Aurífera"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 SERVER_HOST = os.getenv("HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("PORT", "8000"))

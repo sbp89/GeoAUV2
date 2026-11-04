@@ -20,8 +20,8 @@
       <div class="brand">
         <div class="brand-icon" aria-hidden="true">Au</div>
         <div>
-          <div class="brand-title">GeoAuV2 <span class="badge-version">v2.2</span></div>
-          <div class="brand-sub" data-i18n="subtitle">Prospección Aurífera Multisensor · IA &amp; Geofísica 3D</div>
+          <div class="brand-title">GeoAuV2 <span class="badge-version">v2.3</span></div>
+          <div class="brand-sub" data-i18n="subtitle">Prefactibilidad Aurífera Multisensor · COG 16-bit &amp; Geofísica 3D</div>
         </div>
       </div>
     </div>
@@ -51,17 +51,22 @@
         <span data-i18n="run_btn">Analizar Oro (Ctrl+R)</span>
       </button>
 
-      <button id="btnToggleExecDrawer" class="btn-ghost active-drawer-btn" title="Mostrar / ocultar Resumen Ejecutivo y Corte A–B">
+      <button id="btnToggleExecDrawer" class="btn-ghost active-drawer-btn hide-sm" title="Mostrar / ocultar Resumen Ejecutivo y Corte A–B">
         <span>📊 Resumen Au</span>
       </button>
 
+      <button id="btnOpenMethodology" class="btn-ghost btn-methodology" title="Transparencia metodológica: ver sensores, bandas, ecuaciones y alcance en uso">
+        <span>🔬 Qué se usa</span>
+        <span id="tierMiniPill" class="tier-dot">16b</span>
+      </button>
+
       <button id="btnCloudHistory" class="btn-ghost" title="Consultar historial y proyectos guardados en la nube">
-        <span>☁ Nube</span>
+        <span class="hide-xs">☁ Nube</span><span class="show-xs-inline">☁</span>
         <span id="cloudStatusDot" class="status-dot offline"></span>
       </button>
 
       <button id="btnOpenGuide" class="btn-icon" title="Guía rápida de interpretación de mapas de oro">?</button>
-      <button id="btnLang" class="btn-icon" title="Cambiar idioma ES / EN">ES</button>
+      <button id="btnLang" class="btn-icon hide-xs" title="Cambiar idioma ES / EN">ES</button>
       <button id="btnTheme" class="btn-icon" title="Cambiar tema Oscuro / Claro">☀</button>
     </div>
   </header>
@@ -101,6 +106,11 @@
 
     <!-- Panel Lateral Izquierdo Técnico -->
     <aside class="side-panel" id="leftSidePanel">
+      <div class="mobile-sheet-bar">
+        <strong>⚙️ Configuración Geocientífica (9 Pasos)</strong>
+        <button type="button" id="btnCloseLeftMobile" class="btn-xs">🗺️ Ver Mapa ✕</button>
+      </div>
+
       <!-- Tarjeta KPI Rápida -->
       <div class="kpi-strip">
         <div class="kpi-box">
@@ -188,12 +198,17 @@
             <label><input type="checkbox" id="chkMaskVeg" checked /> Filtrar Dosel Denso (NDVI)</label>
             <label><input type="checkbox" id="chkMaskWater" checked /> Filtrar Ríos Claros (NDWI)</label>
             <label><input type="checkbox" id="chkMaskShadow" checked /> Filtrar Sombras Topográficas</label>
+            <label title="Excluye techos de concreto/zinc, vías pavimentadas y cascos urbanos en modelos de roca dura"><input type="checkbox" id="chkMaskUrban" checked /> 🏙️ Excluir Techos / Zona Urbana</label>
           </div>
         </div>
 
-        <div class="card-block">
-          <h3>Trazabilidad Satelital Sin Nubes y Cascada</h3>
+        <div class="card-block evidence-live-card">
+          <div class="row-between">
+            <h3>🔬 Fuentes &amp; Evidencia Espectral en Uso</h3>
+            <button type="button" id="btnOpenMethodFromStep1" class="btn-xs">Ficha Completa ↗</button>
+          </div>
           <div id="cascadeBadges" class="badge-row"></div>
+          <div id="step1CoverageBarWrap" class="coverage-wrap"></div>
           <ul id="cascadeLogs" class="diag-list">
             <li>Seleccione un distrito o haga clic en el mapa para iniciar el barrido espectral.</li>
           </ul>
@@ -204,7 +219,10 @@
       <section class="step-pane" id="step-2">
         <div class="pane-header">
           <h2>2. Índices Mineralógicos &amp; Normalización</h2>
-          <p>27 índices orbitales (Alunita, Sericita, Caolinita, Sílice, Cuarzo, Gossan Fe³⁺ y Sedimentos Aluviales).</p>
+          <p>Cocientes espectrales sobre reflectancia BOA de 16 bits con división segura <code>sdiv</code> y compuerta física de amplitud.</p>
+        </div>
+        <div class="using-strip" id="step2UsingStrip">
+          <strong>🔬 En uso:</strong> Cocientes calibrados Sentinel-2 MSI (10–20 m) + archivo ASTER SWIR/TIR (cuando aplica pre-2008). Los píxeles bajo bosque denso o nube SCL permanecen como <code>NaN</code>.
         </div>
 
         <div class="form-grid-2">
@@ -318,8 +336,13 @@
         </label>
         <p id="depositModelDesc" class="muted-note"></p>
 
-        <div class="check-row">
-          <label><input type="checkbox" id="chkStrictNan" /> Modo Estricto NaN (Exige 100% bandas descubiertas por píxel)</label>
+        <div class="check-col" style="gap:6px;">
+          <label title="Rigor de prefactibilidad: no extrapola anomalías estructurales bajo bosque cerrado, nubes SCL ni áreas urbanas"><input type="checkbox" id="chkStrictEvidence" checked /> 🔒 Evidencia Estricta (No extrapolar bajo bosque/nubes)</label>
+          <label><input type="checkbox" id="chkStrictNan" /> Modo Estricto NaN (Exige 100% bandas válidas por píxel)</label>
+        </div>
+
+        <div class="using-strip" id="step5UsingStrip">
+          <strong>⚖️ Rigor Prefactibilidad:</strong> El potencial aluvial (<code>ALLUVIAL_POWER</code>) actúa exclusivamente en el modelo <em>Placer Aluvial</em>; nunca contamina modelos de veta, pórfido o epitermal.
         </div>
 
         <div class="card-block">
@@ -404,7 +427,7 @@
           <div id="valLandisBadge" class="info-banner"></div>
           <div id="valMetricsGrid" class="mini-stats-grid"></div>
           <h4 style="margin:10px 0 6px;font-size:12px;">Matriz de Confusión Espacial</h4>
-          <div id="valConfusionTable"></div>
+          <div id="valConfusionTable" class="table-scroll"></div>
         </div>
 
         <div class="card-block">
@@ -508,8 +531,19 @@
           <label title="Títulos mineros vigentes ANM"><input type="checkbox" id="chkVecAnm" checked /> 📜 ANM</label>
         </div>
 
-        <button id="btnToggleLabels" class="btn-small btn-primary-outline" title="Mostrar u ocultar nombres de municipios, veredas, ríos y distritos">🏷️ Nombres: ON</button>
-        <button id="btnMeasureDist" class="btn-small" title="Medir distancia, Rumbo Estructural (Azimut) y trazar Corte A–B en vivo">📏 Rumbo / Corte A–B</button>
+        <button type="button" id="btnPeekBase" class="btn-small btn-peek" title="Mantenga presionado (o barra espaciadora) para ver el afloramiento / roca base sin capa encima">👁️ Ver Roca Base</button>
+        <button type="button" id="btnToggleLabels" class="btn-small btn-primary-outline" title="Mostrar u ocultar nombres de municipios, veredas, ríos y distritos">🏷️ Nombres: ON</button>
+        <button type="button" id="btnMeasureDist" class="btn-small" title="Medir distancia, Rumbo Estructural (Azimut) y trazar Corte A–B en vivo">📏 Rumbo / Corte A–B</button>
+      </div>
+
+      <!-- Barra de Acceso Rápido a Capas Visuales Clave -->
+      <div class="quick-layer-bar" id="quickLayerBar" aria-label="Cambio rápido de capa visual">
+        <button type="button" class="ql-pill active" data-layer="gold_hotspots">🔥 Focos Au</button>
+        <button type="button" class="ql-pill" data-layer="prospectivity_thermal">🌈 Térmico</button>
+        <button type="button" class="ql-pill" data-layer="alluvial_placer">🌊 Aluvial</button>
+        <button type="button" class="ql-pill" data-layer="ml_clusters">🧠 IA Alteración</button>
+        <button type="button" class="ql-pill" data-layer="rgb_mineralogico">💎 Ternario SWIR</button>
+        <button type="button" class="ql-pill" data-layer="lineaments">📐 Lineamientos</button>
       </div>
 
       <div id="map" role="application" aria-label="Visor satelital interactivo de prospección aurífera"></div>
@@ -595,6 +629,17 @@
         </div>
       </div>
 
+      <!-- Apartado Informativo en Vivo: ¿Qué se está usando en este cuadrante? -->
+      <div class="card-block evidence-live-card" id="execEvidenceCard">
+        <div class="row-between">
+          <h3>🔬 ¿Qué se está usando aquí?</h3>
+          <button type="button" id="btnOpenMethodFromDrawer" class="btn-xs">Ver detalle ↗</button>
+        </div>
+        <div id="execTierBanner" class="tier-banner">Cargando trazabilidad orbital...</div>
+        <div id="execCoverageBarWrap" class="coverage-wrap"></div>
+        <div id="execActiveSourcesMini" class="sources-mini-list"></div>
+      </div>
+
       <!-- Gráfico Radar Retina de los 4 Pilares -->
       <div class="card-block">
         <div class="row-between">
@@ -628,6 +673,48 @@
       </div>
     </aside>
   </main>
+
+  <!-- Barra de Navegación Inferior Nativa para Móvil / Tablet -->
+  <nav class="mobile-bottom-nav" id="mobileBottomNav" aria-label="Navegación principal móvil">
+    <button type="button" class="mnav-btn active" data-mview="map">
+      <span class="mnav-ico">🗺️</span>
+      <span>Mapa</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mview="left">
+      <span class="mnav-ico">⚙️</span>
+      <span>Módulos</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mview="right">
+      <span class="mnav-ico">📊</span>
+      <span>Resumen Au</span>
+    </button>
+    <button type="button" class="mnav-btn" data-mview="method">
+      <span class="mnav-ico">🔬</span>
+      <span>Qué se usa</span>
+    </button>
+  </nav>
+
+  <!-- Modal de Transparencia Metodológica: ¿Qué se está usando? -->
+  <div id="methodologyModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="methodModalTitle">
+    <div class="modal-card modal-wide">
+      <div class="row-between">
+        <div>
+          <h2 id="methodModalTitle" style="margin:0;">🔬 Transparencia Científica: ¿Qué se está usando?</h2>
+          <small class="muted-note">Trazabilidad en vivo de sensores orbitales, ecuaciones mineralógicas, IA y alcance de prefactibilidad.</small>
+        </div>
+        <button type="button" id="btnCloseMethodology" class="btn-icon" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="method-tabs" id="methodTabsBar" role="tablist">
+        <button type="button" class="mtab-btn active" data-mtab="sources" role="tab">🛰️ Sensores &amp; Fuentes</button>
+        <button type="button" class="mtab-btn" data-mtab="equations" role="tab">🧪 Índices &amp; Ecuaciones</button>
+        <button type="button" class="mtab-btn" data-mtab="ai" role="tab">🧠 IA &amp; Prospectividad</button>
+        <button type="button" class="mtab-btn" data-mtab="scope" role="tab">⚖️ Alcance Prefactibilidad</button>
+      </div>
+
+      <div class="modal-scroll" id="methodologyModalBody"></div>
+    </div>
+  </div>
 
   <!-- Modal de Guía Interactiva de Interpretación -->
   <div id="guideModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">

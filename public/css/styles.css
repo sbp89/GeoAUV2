@@ -44,6 +44,7 @@ body {
   background: var(--bg-app);
   color: var(--text-main);
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1420,47 +1421,571 @@ html[data-theme="light"] .map-legend {
   to { transform: translateY(0); opacity: 1; }
 }
 
-/* Responsivo Móvil y Pantallas Medianas */
+/* Responsivo Móvil, Tablet y Componentes de Transparencia Metodológica v2.3 */
+.show-xs-inline {
+  display: none;
+}
+
+.mobile-sheet-bar,
+.mobile-bottom-nav {
+  display: none;
+}
+
+.btn-methodology {
+  border-color: rgba(56, 189, 248, 0.45) !important;
+  background: rgba(56, 189, 248, 0.1) !important;
+}
+
+.btn-methodology:hover {
+  border-color: #38bdf8 !important;
+  background: rgba(56, 189, 248, 0.2) !important;
+}
+
+.tier-dot {
+  font-size: 9.5px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 99px;
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.5);
+}
+
+.tier-dot.fallback {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.evidence-live-card {
+  border-color: rgba(56, 189, 248, 0.34);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.06) 0%, var(--bg-card) 100%);
+}
+
+.tier-banner {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.13);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+  margin-bottom: 7px;
+  line-height: 1.35;
+}
+
+.tier-banner.fallback {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.42);
+  color: var(--accent-bright);
+}
+
+.coverage-wrap {
+  margin: 6px 0;
+}
+
+.cov-bar-track {
+  height: 9px;
+  width: 100%;
+  background: var(--bg-input);
+  border-radius: 99px;
+  overflow: hidden;
+  display: flex;
+  border: 1px solid var(--border);
+}
+
+.cov-seg {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.cov-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.cov-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cov-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.sources-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.source-mini-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+}
+
+.source-mini-row span:first-child {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.using-strip {
+  background: rgba(245, 158, 11, 0.09);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 11px;
+  color: var(--text-main);
+  line-height: 1.4;
+}
+
+/* Barra Rápida de Capas sobre el Mapa + Botón Peek Roca Base */
+.quick-layer-bar {
+  position: absolute;
+  top: 56px;
+  left: 52px;
+  z-index: 815;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  pointer-events: auto;
+}
+
+.ql-pill {
+  background: rgba(15, 21, 33, 0.88);
+  backdrop-filter: blur(8px);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 99px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="light"] .ql-pill {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+.ql-pill:hover {
+  border-color: var(--accent);
+}
+
+.ql-pill.active {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(217, 119, 6, 0.95));
+  color: #0b0f17;
+  border-color: #fde047;
+}
+
+.btn-peek {
+  border-color: rgba(56, 189, 248, 0.48) !important;
+  color: #38bdf8 !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.btn-peek.peeking {
+  background: #38bdf8 !important;
+  color: #0b0f17 !important;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.6);
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Modal de Transparencia Metodológica */
+.modal-wide {
+  width: min(940px, 96vw);
+  max-height: 88dvh;
+}
+
+.method-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.mtab-btn {
+  background: var(--bg-card);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.mtab-btn.active {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--accent-bright);
+  border-color: var(--accent);
+}
+
+.method-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.method-source-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 11px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.status-chip {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.status-chip.activo {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+.status-chip.respaldo {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+.status-chip.inactivo_fisico {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+}
+
+.scope-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
 @media (max-width: 1280px) {
   :root {
     --panel-width: 345px;
-    --drawer-width: 315px;
+    --drawer-width: 318px;
   }
 }
 
-@media (max-width: 1024px) {
+/* ============================================================================
+   Experiencia Nativa Mobile & Tablet (<= 960px)
+   ============================================================================ */
+@media (max-width: 960px) {
+  .hide-sm {
+    display: none !important;
+  }
+
+  #btnToggleLeftPanel,
+  #btnCloseExecDrawer {
+    display: none !important;
+  }
+
   .topbar {
     flex-wrap: wrap;
+    padding: 6px 10px;
+    gap: 6px;
+    min-height: auto;
   }
+
+  .brand-sub {
+    display: none;
+  }
+
+  .brand-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .brand-title {
+    font-size: 14.5px;
+  }
+
+  .topbar-controls {
+    gap: 5px;
+    margin-left: auto;
+  }
+
+  .preset-wrap span {
+    display: none;
+  }
+
+  .preset-wrap select {
+    min-width: 132px;
+    max-width: 165px;
+    padding: 6px 7px;
+  }
+
   .search-omni {
     order: 3;
     max-width: 100%;
     flex-basis: 100%;
   }
-  .workspace {
-    flex-direction: column;
-    overflow-y: auto;
+
+  /* Evitar auto-zoom molesto de Safari iOS al tocar inputs */
+  input[type="text"],
+  input[type="number"],
+  input[type="date"],
+  select,
+  textarea {
+    font-size: 16px;
   }
-  .step-rail {
+  .search-omni input {
+    font-size: 16px !important;
+  }
+
+  .workspace {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Vista por defecto en móvil: Mapa a pantalla completa */
+  .workspace .step-rail,
+  .workspace .side-panel,
+  .workspace .exec-drawer {
+    display: none !important;
+  }
+
+  .workspace .map-stage {
+    display: flex !important;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+
+  /* Modo Móvil: Pestaña Módulos (9 Pasos + Panel Izquierdo) */
+  .workspace.mview-left .map-stage {
+    display: none !important;
+  }
+
+  .workspace.mview-left .step-rail {
+    display: flex !important;
     width: 100%;
     flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
     border-right: none;
     border-bottom: 1px solid var(--border);
+    padding: 6px 8px;
+    gap: 6px;
+    flex-shrink: 0;
+    -webkit-overflow-scrolling: touch;
   }
-  .side-panel, .exec-drawer {
+
+  .workspace.mview-left .step-btn {
+    flex-direction: row;
+    padding: 6px 10px;
+    gap: 6px;
+    flex-shrink: 0;
+    min-height: 36px;
+  }
+
+  .workspace.mview-left .step-lbl {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .workspace.mview-left .side-panel {
+    display: flex !important;
     width: 100%;
-    max-height: none;
+    flex: 1;
+    min-height: 0;
     border-right: none;
-    border-left: none;
-    border-bottom: 1px solid var(--border);
+    padding: 10px 12px 24px;
   }
-  .map-stage {
-    min-height: 62vh;
+
+  .mobile-sheet-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--accent-bright);
+  }
+
+  /* Modo Móvil: Pestaña Resumen Au (Drawer Derecho) */
+  .workspace.mview-right .map-stage {
+    display: none !important;
+  }
+
+  .workspace.mview-right .exec-drawer {
+    display: flex !important;
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border-left: none;
+    padding: 12px 12px 24px;
+  }
+
+  /* Controles flotantes del mapa compactos y deslizables horizontalmente */
+  .map-toolbar {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 8px;
+    gap: 8px;
+    scrollbar-width: none;
+  }
+  .map-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .quick-layer-bar {
+    top: 54px;
+    left: 8px;
+    right: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .quick-layer-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .leaflet-top.leaflet-left {
+    top: 88px !important;
+  }
+
+  .map-legend {
+    bottom: 10px;
+    left: 8px;
+    width: min(260px, calc(100vw - 16px));
+    padding: 7px 9px;
+  }
+
+  .spectral-hud {
+    bottom: 10px;
+    right: 8px;
+    width: min(285px, calc(100vw - 16px));
+    padding: 7px 9px;
+  }
+
+  /* Barra Inferior Fija Estilo App Nativa */
+  .mobile-bottom-nav {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    padding: 4px 6px calc(4px + env(safe-area-inset-bottom, 0px));
+    z-index: 1250;
+    flex-shrink: 0;
+  }
+
+  .mnav-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 46px;
+    font-size: 10.5px;
+    font-weight: 700;
+    border-radius: 8px;
+  }
+
+  .mnav-btn .mnav-ico {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .mnav-btn.active {
+    color: var(--accent-bright);
+    background: rgba(245, 158, 11, 0.15);
+  }
+
+  .toast-container {
+    bottom: 70px;
+    width: 92vw;
+    align-items: center;
+  }
+
+  .guide-grid,
+  .method-source-grid,
+  .scope-cols {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-backdrop {
+    padding: 8px;
+  }
+
+  .modal-card {
+    width: 96vw;
+    max-height: 90dvh;
+    padding: 13px;
+  }
+}
+
+@media (max-width: 560px) {
+  .hide-xs {
+    display: none !important;
+  }
+  .show-xs-inline {
+    display: inline !important;
+  }
+  .preset-wrap {
+    display: none;
+  }
+  #btnRunPipeline span[data-i18n="run_btn"] {
+    font-size: 11.5px;
+  }
+  .btn-primary {
+    padding: 7px 11px;
+  }
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .coord-card .form-grid-2 {
+    grid-template-columns: 1fr 1fr;
   }
   .spectral-hud {
     display: none;
-  }
-  .guide-grid {
-    grid-template-columns: 1fr;
   }
 }

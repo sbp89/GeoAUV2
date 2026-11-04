@@ -214,14 +214,18 @@ var nFeOx = normalizarP2P98(s2FeOx, 'S2_FEOX');
 var nCAI  = normalizarP2P98(s2Arcilla, 'S2_CAI');
 var nL8   = normalizarP2P98(l8Arcilla, 'L8_CLAY');
 
-// MÓDULO 5: Integración Ponderada con Cascada Automática
+// MÓDULO 5: Integración Ponderada con Cascada Automática (Escena ASTER Individual de Menor Nubosidad)
 var prospectividad = ee.Image(ee.Algorithms.If(
   tieneAsterSWIR,
   (function() {{
-    var ast = asterCol.median().clip(roi);
-    var ali = ast.select('B07').divide(ast.select('B05'))
-      .multiply(ast.select('B07').divide(ast.select('B08')))
-      .updateMask(mascaraRoca).rename('AST_ALI');
+    // Seleccionar la escena individual más despejada para evitar mezclar ganancias radiométricas dispares entre órbitas
+    var ast = ee.Image(asterCol.sort('CLOUDCOVER').first()).clip(roi);
+    var b05 = ast.select('B05').subtract(1).multiply(0.0703);
+    var b07 = ast.select('B07').subtract(1).multiply(0.0637);
+    var b08 = ast.select('B08').subtract(1).multiply(0.0415);
+    var ali = b07.divide(b05.where(b05.lte(0.001), 0.001))
+      .multiply(b07.divide(b08.where(b08.lte(0.001), 0.001)))
+      .updateMask(b05.gt(0.05)).updateMask(mascaraRoca).rename('AST_ALI');
     var nALI = normalizarP2P98(ali, 'AST_ALI');
     return nALI.multiply(0.45).add(nCAI.multiply(0.25)).add(nFeOx.multiply(0.20)).add(nL8.multiply(0.10));
   }})(),

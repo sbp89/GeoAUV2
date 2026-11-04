@@ -6,10 +6,10 @@ Motor de Índices Espectrales Multisensor, Máscaras Ambientales y Renderizado C
 """
 import base64
 import io
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 import numpy as np
 from PIL import Image
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import binary_erosion
 
 
 EPS = 1e-6
@@ -291,32 +291,72 @@ def build_environmental_mask(
     mask_water: bool = True,
     ndwi_threshold: float = 0.15,
     mask_shadows: bool = True,
-) -> Tuple[np.ndarray, Dict[str, float]]:
+    mask_urban: bool = True,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    Construye máscara booleana de píxeles válidos para exploración mineral:
-    True = roca/suelo/grava analizable; False = enmascarado por vegetación densa, agua o sombra.
+    Construye máscara booleana rigurosa de píxeles válidos para exploración mineral:
+    True = roca/suelo/grava genuinamente observable;
+    False = enmascarado por nubes/sombra SCL (NaN), vegetación densa, agua, sombra topográfica o infraestructura urbana.
     """
     ndvi = indices["ndvi"]
     ndwi = indices["ndwi"]
-    albedo = (cube["S2_B2"] + cube["S2_B3"] + cube["S2_B4"]) / 3.0
+    ndbi = indices["ndbi"]
+    b2 = cube["S2_B2"]
+    albedo = (b2 + cube["S2_B3"] + cube["S2_B4"]) / 3.0
 
-    veg_masked = (ndvi > ndvi_threshold) if mask_vegetation else np.zeros_like(ndvi, dtype=bool)
-    water_masked = (ndwi > ndwi_threshold) if mask_water else np.zeros_like(ndwi, dtype=bool)
-    shadow_masked = (albedo < 0.025) if mask_shadows else np.zeros_like(albedo, dtype=bool)
+    cloud_nodata = ~np.isfinite(ndvi)
+    veg_masked = (np.isfinite(ndvi) & (ndvi > ndvi_threshold)) if mask_vegetation else np.zeros_like(ndvi, dtype=bool)
+    water_masked = (np.isfinite(ndwi) & (ndwi > ndwi_threshold)) if mask_water else np.zeros_like(ndwi, dtype=bool)
+    shadow_masked = (np.isfinite(albedo) & (albedo < 0.025)) if mask_shadows else np.zeros_like(albedo, dtype=bool)
 
-    valid_mask = ~(veg_masked | water_masked | shadow_masked) & np.isfinite(ndvi)
+    cai_u = indices.get("s2_arcilla_cai")
+    if cai_u is None:
+        cai_u = sdiv(cube["S2_B11"], cube["S2_B12"])
+    feox_u = indices.get("s2_feox")
+    if feox_u is None:
+        feox_u = sdiv(cube["S2_B4"], b2)
+
+    if mask_urban:
+        urban_masked = (
+            np.isfinite(b2)
+            & (b2 > 0.105)
+            & np.isfinite(cai_u)
+            & (cai_u < 1.38)
+            & np.isfinite(feox_u)
+            & (feox_u < 1.62)
+            & np.isfinite(ndbi)
+            & (ndbi > -0.02)
+            & np.isfinite(ndvi)
+            & (ndvi < 0.25)
+        )
+    else:
+        urban_masked = np.zeros_like(ndvi, dtype=bool)
+
+    valid_mask = ~(cloud_nodata | veg_masked | water_masked | shadow_masked | urban_masked)
 
     total = max(valid_mask.size, 1)
-    if np.sum(valid_mask) / total < 0.08 and mask_vegetation:
-        relaxed_veg = ndvi > min(0.78, ndvi_threshold + 0.22)
-        valid_mask = ~(relaxed_veg | water_masked | shadow_masked) & np.isfinite(ndvi)
+    veg_relaxed = False
+    effective_ndvi_thr = round(float(ndvi_threshold), 3)
+    if (
+        np.sum(valid_mask) / total < 0.06
+        and mask_vegetation
+        and np.sum(~cloud_nodata) / total >= 0.12
+    ):
+        effective_ndvi_thr = round(min(0.72, float(ndvi_threshold) + 0.18), 3)
+        relaxed_veg = np.isfinite(ndvi) & (ndvi > effective_ndvi_thr)
+        valid_mask = ~(cloud_nodata | relaxed_veg | water_masked | shadow_masked | urban_masked)
         veg_masked = relaxed_veg
+        veg_relaxed = True
 
-    mask_stats = {
+    mask_stats: Dict[str, Any] = {
         "valid_rock_soil_pct": round(100.0 * float(np.sum(valid_mask)) / total, 2),
         "vegetation_masked_pct": round(100.0 * float(np.sum(veg_masked)) / total, 2),
+        "cloud_nodata_pct": round(100.0 * float(np.sum(cloud_nodata)) / total, 2),
         "water_masked_pct": round(100.0 * float(np.sum(water_masked)) / total, 2),
+        "urban_masked_pct": round(100.0 * float(np.sum(urban_masked)) / total, 2),
         "shadow_masked_pct": round(100.0 * float(np.sum(shadow_masked)) / total, 2),
+        "veg_relaxed_warning": veg_relaxed,
+        "effective_ndvi_threshold": effective_ndvi_thr,
     }
     return valid_mask, mask_stats
 
@@ -390,25 +430,31 @@ def _rgba_to_b64_png(rgba: np.ndarray) -> str:
 
 
 def _upscale_scalar_smooth(arr_01: np.ndarray, upscale_to: int = 320) -> Tuple[np.ndarray, np.ndarray]:
-    """Remuestrea de forma bicúbica preservando bordes de máscara NaN para evitar aspecto pixelado."""
+    """
+    Remuestrea mediante Convolución Normalizada (resample(val*mask) / resample(mask))
+    preservando de forma exacta los bordes NaN (bosque, nubes SCL, agua, infraestructura)
+    sin filtrar medianas artificiales ni difuminar vetas estrechas de 10-20 m.
+    """
     data = np.asarray(arr_01, dtype=np.float64)
     valid = np.isfinite(data)
     if not np.any(valid):
         return np.zeros((upscale_to, upscale_to), dtype=np.float64), np.zeros((upscale_to, upscale_to), dtype=bool)
 
-    med = float(np.nanmedian(data))
-    filled = np.where(valid, data, med).astype(np.float32)
-    mask_f = valid.astype(np.float32)
+    num_f = np.where(valid, np.clip(data, 0.0, 1.0), 0.0).astype(np.float32)
+    den_f = valid.astype(np.float32)
 
-    val_up = np.asarray(
-        Image.fromarray(filled, mode="F").resize((upscale_to, upscale_to), Image.Resampling.BICUBIC),
+    num_up = np.asarray(
+        Image.fromarray(num_f, mode="F").resize((upscale_to, upscale_to), Image.Resampling.BILINEAR),
         dtype=np.float64,
     )
-    msk_up = np.asarray(
-        Image.fromarray(mask_f, mode="F").resize((upscale_to, upscale_to), Image.Resampling.BILINEAR),
+    den_up = np.asarray(
+        Image.fromarray(den_f, mode="F").resize((upscale_to, upscale_to), Image.Resampling.BILINEAR),
         dtype=np.float64,
     )
-    return np.clip(val_up, 0.0, 1.0), (msk_up >= 0.45)
+    valid_up = den_up >= 0.42
+    val_up = np.zeros((upscale_to, upscale_to), dtype=np.float64)
+    val_up[valid_up] = np.clip(num_up[valid_up] / den_up[valid_up], 0.0, 1.0)
+    return val_up, valid_up
 
 
 def render_scalar_png_b64(
@@ -457,13 +503,11 @@ def render_gold_hotspots_png_b64(
 ) -> str:
     """
     Renderizador especializado de Focos y Vetas Auríferas sobre Fondo Satelital Limpio:
-    - Píxeles < cutoff: 100% transparentes (deja ver nítido el relieve satelital, ríos y accesos).
-    - Halo mineralizado (cutoff..0.65): Transición esmeralda -> ámbar translúcido.
-    - Veta / Terraza principal (0.65..0.80): Naranja fuego -> oro intenso.
-    - Núcleo Aurífero (> 0.80): Rojo carmesí / oro incandescente con isolíneas luminosas de contorno.
+    - Píxeles enmascarados (NaN) o < cutoff: 100% transparentes (deja ver nítido el relieve satelital).
+    - Convolución normalizada sin gaussiana destructiva para preservar afloramientos angostos (10-20m).
+    - Isolíneas luminosas calculadas estrictamente al interior de la máscara válida (sin anillos de borde).
     """
     val_up, valid = _upscale_scalar_smooth(prospectivity_01, upscale_to=upscale_to)
-    val_smooth = gaussian_filter(val_up, sigma=0.8)
     rgba = np.zeros((upscale_to, upscale_to, 4), dtype=np.uint8)
 
     xp = [cutoff, 0.48, 0.62, 0.74, 0.85, 0.94, 1.0]
@@ -471,25 +515,27 @@ def render_gold_hotspots_png_b64(
     g_st = [185, 197, 179, 115, 48, 215, 252]
     b_st = [129, 94, 8, 22, 68, 0, 190]
 
-    active = valid & (val_smooth >= cutoff)
+    active = valid & (val_up >= cutoff)
     if np.any(active):
-        v = val_smooth[active]
+        v = val_up[active]
         rgba[active, 0] = np.interp(v, xp, r_st).astype(np.uint8)
         rgba[active, 1] = np.interp(v, xp, g_st).astype(np.uint8)
         rgba[active, 2] = np.interp(v, xp, b_st).astype(np.uint8)
 
         rel = np.clip((v - cutoff) / max(1.0 - cutoff, 1e-4), 0.0, 1.0)
-        alpha = np.clip(np.power(rel, 0.72) * 228.0 + 20.0, 0.0, 248.0).astype(np.uint8)
+        alpha = np.clip(np.power(rel, 0.72) * 228.0 + 24.0, 0.0, 248.0).astype(np.uint8)
         rgba[active, 3] = alpha
 
-        # Isolíneas nítidas de contorno en umbrales 0.66 (Veta/Halo Fuerte) y 0.80 (Núcleo P1)
-        gy, gx = np.gradient(val_smooth)
-        grad_mag = np.hypot(gx, gy)
-        iso_66 = valid & (np.abs(val_smooth - 0.66) <= np.maximum(grad_mag * 0.85, 0.005))
-        iso_80 = valid & (np.abs(val_smooth - 0.80) <= np.maximum(grad_mag * 0.95, 0.006))
+        # Isolíneas estrictamente al interior de roca observable para evitar falsos bordes de bosque
+        interior = binary_erosion(valid, iterations=2)
+        if np.any(interior):
+            gy, gx = np.gradient(val_up)
+            grad_mag = np.hypot(gx, gy)
+            iso_66 = interior & (np.abs(val_up - 0.66) <= np.maximum(grad_mag * 0.85, 0.005))
+            iso_80 = interior & (np.abs(val_up - 0.80) <= np.maximum(grad_mag * 0.95, 0.006))
 
-        rgba[iso_66] = [253, 224, 71, 235]   # Contorno dorado brillante
-        rgba[iso_80] = [255, 255, 240, 252]  # Contorno blanco-oro incandescente
+            rgba[iso_66] = [253, 224, 71, 235]   # Contorno dorado brillante
+            rgba[iso_80] = [255, 255, 240, 252]  # Contorno blanco-oro incandescente
 
     return _rgba_to_b64_png(rgba)
 

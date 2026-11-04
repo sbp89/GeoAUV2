@@ -144,6 +144,183 @@ def _downsample_grid(arr: np.ndarray, step: int = 2) -> List[List[float]]:
     return clean.tolist()
 
 
+def _build_methodology_audit(
+    req: AnalysisRequest,
+    diagnostics: Dict[str, Any],
+    dem_source: str,
+    structural_stats: Dict[str, Any],
+    sgc_metrics: Dict[str, Any],
+    legal_status: Dict[str, Any],
+    ml_summary: Dict[str, Any],
+    active_spec_weights: Dict[str, float],
+    weight_source: str,
+    prosp_summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Construye el dictamen de transparencia metodológica ('¿Qué se está usando?') con las fuentes orbitales,
+    sensores, resoluciones, ecuaciones, coberturas enmascaradas y alcance de prefactibilidad en tiempo real.
+    """
+    stac = diagnostics.get("stac_scene") or {}
+    cog_real = bool(diagnostics.get("cog_real", False))
+    cog_meta = diagnostics.get("cog_meta") or {}
+    aster_on = bool(diagnostics.get("aster_swir_available", False))
+    mask_stats = diagnostics.get("mask_stats") or {}
+    model_cfg = DEPOSIT_MODELS.get(req.deposit_model, DEPOSIT_MODELS["orogenico_vetas"])
+
+    if cog_real:
+        s2_status = "activo"
+        s2_badge = "COG 16-bit Real"
+        s2_detail = (
+            f"Escena {stac.get('scene_id', 'S2_L2A')} ({stac.get('date', 'reciente')}, "
+            f"nubes {stac.get('cloud_cover_pct', 0)}%) · Bandas B02, B03, B04, B08, B8A, B11, B12 + máscara oficial ESA SCL "
+            f"(~{cog_meta.get('target_res_m', 20)} m/px, {cog_meta.get('scenes_composited', 1)} escena(s))."
+        )
+    else:
+        s2_status = "respaldo"
+        s2_badge = "Respaldo Óptico"
+        s2_detail = f"{diagnostics.get('optical_source', 'Mosaico Sentinel-2 Cloudless')} · Calibración multiespectral."
+
+    if aster_on:
+        ast_status = "activo"
+        ast_badge = "Archivo 2000–2008"
+        ast_detail = "Bandas históricas ASTER L1T VNIR + SWIR (B4–B9, 30 m) + TIR (B10–B14, 90 m) habilitadas para ventana pre-2008."
+    else:
+        ast_status = "inactivo_fisico"
+        ast_badge = "SWIR Inactivo Post-2008"
+        ast_detail = (
+            "El detector SWIR de ASTER cesó operaciones el 28-abr-2008 (NASA/METI). Por rigor de prefactibilidad no se "
+            "sintetizan bandas SWIR artificiales en fechas modernas; los pesos se redistribuyen a reflectancia medida Sentinel-2."
+        )
+
+    dem_is_cop = "Copernicus" in dem_source
+    sources_active = [
+        {
+            "id": "optical_swir",
+            "category": "Reflectancia Orbital",
+            "name": "Sentinel-2 L2A MSI (ESA / Copernicus)",
+            "status": s2_status,
+            "badge": s2_badge,
+            "detail": s2_detail,
+        },
+        {
+            "id": "aster_swir_tir",
+            "category": "Espectrometría SWIR/TIR",
+            "name": "TERRA ASTER L1T (Archivo Histórico)",
+            "status": ast_status,
+            "badge": ast_badge,
+            "detail": ast_detail,
+        },
+        {
+            "id": "dem_structural",
+            "category": "Modelo Digital Elevación",
+            "name": dem_source,
+            "status": "activo" if dem_is_cop else "respaldo",
+            "badge": "30m Float32 COG" if dem_is_cop else "Respaldo DEM",
+            "detail": (
+                f"Pendiente media {structural_stats.get('slope_mean_deg', 0)}° (máx {structural_stats.get('slope_max_deg', 0)}°) · "
+                f"Gradientes morfoestructurales Sobel + Laplaciano."
+            ),
+        },
+        {
+            "id": "sgc_geology",
+            "category": "Geología y Metalogenia",
+            "name": "Servicio Geológico Colombiano (SGC ArcGIS REST)",
+            "status": "activo" if sgc_metrics.get("sgc_connected", True) else "respaldo",
+            "badge": f"{sgc_metrics.get('fault_count', 0)} Fallas · {sgc_metrics.get('deposit_count', 0)} Yac.",
+            "detail": (
+                f"Falla más cercana: {sgc_metrics.get('nearest_fault_km', 'N/A')} km · "
+                f"Referencia: {sgc_metrics.get('nearest_deposit_name') or 'Consulta regional SGC'}."
+            ),
+        },
+        {
+            "id": "anm_cadastre",
+            "category": "Catastro Minero",
+            "name": "Agencia Nacional de Minería (ANM AnnA Minería)",
+            "status": "activo",
+            "badge": f"{prosp_summary.get('free_targets_count', 0)} Blancos Libres",
+            "detail": legal_status.get("status_summary", "Cruce geométrico por polígono contra títulos y solicitudes vigentes."),
+        },
+        {
+            "id": "ml_engine",
+            "category": "Clasificación IA / ML",
+            "name": ml_summary.get("method", "K-Means++ Estandarizado"),
+            "status": "activo",
+            "badge": f"{len(ml_summary.get('clusters', []))} Dominios",
+            "detail": (
+                f"Stack activo de {len(ml_summary.get('stack_keys', []))} índices normalizados ({req.norm_method}) + "
+                f"Similitud Coseno LOO ({ml_summary.get('spectral_similarity', {}).get('loo_coherence', 0)})."
+            ),
+        },
+        {
+            "id": "basemap_visual",
+            "category": "Cartografía Base Visual",
+            "name": "Mosaicos HD Leaflet (Google Satélite / Sentinel-2 Cloudless / ESRI)",
+            "status": "activo",
+            "badge": "Solo Visualización",
+            "detail": "Las teselas RGB de 8 bits se emplean exclusivamente como fondo cartográfico visual; jamás alteran la matemática espectral.",
+        },
+    ]
+
+    active_equations = []
+    for k, w_val in active_spec_weights.items():
+        cat = INDICES_CATALOG.get(k, {})
+        active_equations.append({
+            "key": k,
+            "name": cat.get("name", k),
+            "sensor": cat.get("sensor", "Multisensor"),
+            "formula": cat.get("formula", ""),
+            "mineral": cat.get("mineral", ""),
+            "weight_pct": round(float(w_val) * 100.0, 1),
+        })
+
+    iw_norm = prosp_summary.get("integrated_weights_normalized", {})
+    return {
+        "data_authenticity_tier": diagnostics.get("data_authenticity_tier", "Reflectancia Multisensor"),
+        "cog_real": cog_real,
+        "deposit_model_key": req.deposit_model,
+        "deposit_model_label": model_cfg["label"],
+        "weight_source": weight_source,
+        "sources_active": sources_active,
+        "surface_breakdown": mask_stats,
+        "active_equations": active_equations,
+        "integrated_pillars_pct": {
+            "spectral": round(float(iw_norm.get("favorability", 0.42)) * 100.0, 1),
+            "structural": round(float(iw_norm.get("structural", 0.26)) * 100.0, 1),
+            "geological_sgc": round(float(iw_norm.get("geological_sgc", 0.20)) * 100.0, 1),
+            "geophysical": round(float(iw_norm.get("geophysical", 0.12)) * 100.0, 1),
+        },
+        "active_filters": {
+            "mask_vegetation": req.mask_vegetation,
+            "ndvi_threshold": mask_stats.get("effective_ndvi_threshold", req.ndvi_threshold),
+            "mask_water": req.mask_water,
+            "ndwi_threshold": req.ndwi_threshold,
+            "mask_shadows": req.mask_shadows,
+            "mask_urban": req.mask_urban,
+            "strict_evidence_mask": req.strict_evidence_mask,
+            "norm_method": req.norm_method,
+        },
+        "prefeasibility_scope": {
+            "stage": "Prefactibilidad Temprana / Selección de Blancos (Greenfield & Brownfield)",
+            "measures_directly": [
+                "Reflectancia superficial calibrada BOA de 16 bits (VNIR-SWIR) sobre afloramientos, claros y drenajes.",
+                "Ensamblajes de alteración hidrotermal (arcillas Al-OH 2.19-2.20 µm, óxidos férricos Fe³⁺/gossan, sílice).",
+                "Lineamientos morfoestructurales reales sobre radar orbital de 30 m (Copernicus GLO-30) y fallas SGC.",
+                "Terrazas de grava cuaternaria y pozas de beneficio en pendientes bajas (exclusivo en modo Placer Aluvial).",
+            ],
+            "requires_ground_verification": [
+                "El sensor óptico/SWIR mide los primeros micrómetros de superficie libre de bosque denso y nubes; no penetra dosel cerrado ni subsuelo profundo.",
+                "La alteración hidrotermal indica circulación de fluidos potencialmente mineralizantes, pero la ley económica de oro (g/t Au) sólo se certifica mediante muestreo de roca/canal y ensayo al fuego.",
+                "Todo blanco P1/P2 debe verificarse con espectrometría portátil en afloramiento, geoquímica multielemental (Au-Ag-As-Sb-Bi), geofísica terrestre (IP/Magnetometría) y perforación DDH.",
+            ],
+            "disclaimer": (
+                "Estudio geocientífico de priorización satelital para prefactibilidad exploratoria. "
+                "Las zonas bajo bosque denso (NDVI alto) o nubes SCL se mantienen enmascaradas (Sin Evidencia Espectral) "
+                "sin extrapolar anomalías artificiales; confirme leyes de Au mediante muestreo geoquímico y sondajes."
+            ),
+        },
+    }
+
+
 @app.post("/api/analyze")
 async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
     preset_obj = next((p for p in DISTRICT_PRESETS if p["id"] == req.preset_id), None)
@@ -184,6 +361,8 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         legal_status, anm_vectors = fut_anm.result()
         dem_arr, dem_source = fut_dem.result()
 
+    slope_deg, lineament_01, structural_stats = compute_slope_and_lineaments(dem_arr, bbox)
+
     cube, diagnostics = build_multisensor_cube(
         bbox=bbox,
         sensor_mode=req.sensor_mode,
@@ -195,6 +374,8 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         known_occurrences=known_occs,
         is_negative_control=is_neg_ctrl,
         grid_size=ANALYSIS_GRID_SIZE,
+        slope_deg=slope_deg,
+        dem_arr=dem_arr,
     )
     aster_swir = bool(diagnostics["aster_swir_available"])
     is_open_ocean = bool(diagnostics.get("is_open_ocean", False))
@@ -209,6 +390,7 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         mask_water=req.mask_water,
         ndwi_threshold=req.ndwi_threshold,
         mask_shadows=req.mask_shadows,
+        mask_urban=req.mask_urban,
     )
     diagnostics["mask_stats"] = mask_stats
     diagnostics["dem_source"] = dem_source
@@ -274,9 +456,9 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         aster_swir_available=aster_swir,
         custom_weights=req.custom_spectral_weights,
         strict_nan=req.strict_nan,
+        raw_indices=masked_indices,
     )
 
-    slope_deg, lineament_01, structural_stats = compute_slope_and_lineaments(dem_arr, bbox)
     iw_dict = req.integrated_weights.model_dump() if req.integrated_weights else None
     prospectivity_01, prosp_summary = compute_integrated_prospectivity(
         favorability_01=favorability_01,
@@ -289,6 +471,7 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         is_open_ocean=is_open_ocean,
         alluvial_power=cube.get("ALLUVIAL_POWER"),
         alluvial_active_pct=alluvial_active_pct,
+        strict_evidence_mask=req.strict_evidence_mask,
     )
     prosp_summary["structural_stats"] = structural_stats
 
@@ -372,7 +555,15 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         "rgb_geologia_12_11_2": render_rgb_composite_b64(cube["S2_B12"], cube["S2_B11"], cube["S2_B2"]),
         "rgb_swir_12_8a_4": render_rgb_composite_b64(cube["S2_B12"], cube["S2_B8A"], cube["S2_B4"]),
         "rgb_infrarrojo_843": render_rgb_composite_b64(cube["S2_B8"], cube["S2_B4"], cube["S2_B3"]),
-        "rgb_natural_432": render_rgb_composite_b64(cube["S2_B4"], cube["S2_B3"], cube["S2_B2"]),
+        "rgb_natural_432": (
+            render_rgb_composite_b64(
+                cube["RGB_PREVIEW"][:, :, 0],
+                cube["RGB_PREVIEW"][:, :, 1],
+                cube["RGB_PREVIEW"][:, :, 2],
+            )
+            if "RGB_PREVIEW" in cube
+            else render_rgb_composite_b64(cube["S2_B4"], cube["S2_B3"], cube["S2_B2"])
+        ),
     }
 
     spec_bands_grid = {}
@@ -430,6 +621,18 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         cloud_sync = SupabaseService.save_analysis_run(run_payload, targets)
 
     prosp_summary["free_targets_count"] = free_targets_count
+    methodology_audit = _build_methodology_audit(
+        req=req,
+        diagnostics=diagnostics,
+        dem_source=dem_source,
+        structural_stats=structural_stats,
+        sgc_metrics=sgc_metrics,
+        legal_status=legal_status,
+        ml_summary=ml_summary,
+        active_spec_weights=active_spec_weights,
+        weight_source=weight_source,
+        prosp_summary=prosp_summary,
+    )
 
     response_payload: Dict[str, Any] = {
         "metadata": {
@@ -443,6 +646,7 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
             "timestamp": now_iso,
         },
         "diagnostics": diagnostics,
+        "methodology_audit": methodology_audit,
         "indices_stats": indices_stats,
         "stack_info": stack_info,
         "ml_summary": ml_summary,

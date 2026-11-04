@@ -80,10 +80,14 @@ def extract_prioritized_targets(
         "Alteracion_Dominante", "Estado_Catastral_ANM",
     ])
 
-    if is_open_ocean:
+    if is_open_ocean or not np.any(np.isfinite(prospectivity_01)):
         return [], {
             "type": "FeatureCollection",
-            "metadata": {"effective_threshold": threshold, "min_area_ha": min_area_ha},
+            "metadata": {
+                "effective_threshold": threshold,
+                "min_area_ha": min_area_ha,
+                "effective_min_area_ha": min_area_ha,
+            },
             "features": [],
         }, csv_buf.getvalue()
 
@@ -94,8 +98,8 @@ def extract_prioritized_targets(
 
     eff_thr = float(threshold)
     binary = np.isfinite(prospectivity_01) & (prospectivity_01 >= eff_thr)
-    if not np.any(binary) and float(np.nanmax(prospectivity_01)) >= 0.56:
-        eff_thr = round(max(0.54, float(np.nanpercentile(prospectivity_01, 88))), 3)
+    if not np.any(binary) and float(np.nanmax(prospectivity_01)) >= 0.58:
+        eff_thr = round(max(0.56, float(np.nanpercentile(prospectivity_01, 88))), 3)
         binary = np.isfinite(prospectivity_01) & (prospectivity_01 >= eff_thr)
 
     structure_8 = np.ones((3, 3), dtype=int)
@@ -106,19 +110,31 @@ def extract_prioritized_targets(
         for cm in clusters_meta:
             cluster_name_map[int(cm["cluster_id"])] = cm["geological_zone"]
 
-    targets: List[Dict[str, Any]] = []
-    features: List[Dict[str, Any]] = []
-
     row_lats = max_lat - (np.arange(h) + 0.5) * d_lat
     dy_m = d_lat * 111320.0
     row_areas_ha = (dy_m * (d_lon * 111320.0 * np.maximum(np.cos(np.radians(row_lats)), 0.05))) / 10000.0
+
+    # En distritos andinos tropicales donde el bosque denso deja < 38% de ventanas de roca observable,
+    # permitir afloramientos expuestos desde max(0.35 ha, 35% de min_area_ha) sin extrapolar bajo el dosel.
+    observable_ratio = float(np.mean(np.isfinite(prospectivity_01)))
+    comp_areas = [float(np.sum(row_areas_ha[np.where(labeled == cid)[0]])) for cid in range(1, n_comp + 1)]
+    eff_min_area_ha = float(min_area_ha)
+    if observable_ratio < 0.38:
+        eff_min_area_ha = round(max(0.35, float(min_area_ha) * 0.35), 2)
+    elif comp_areas and max(comp_areas) < eff_min_area_ha:
+        relaxed_area = round(max(0.32, float(min_area_ha) * 0.25), 2)
+        if max(comp_areas) >= relaxed_area:
+            eff_min_area_ha = relaxed_area
+
+    targets: List[Dict[str, Any]] = []
+    features: List[Dict[str, Any]] = []
 
     for comp_id in range(1, n_comp + 1):
         ys, xs = np.where(labeled == comp_id)
         if ys.size == 0:
             continue
         area_ha = float(np.sum(row_areas_ha[ys]))
-        if area_ha < min_area_ha:
+        if area_ha < eff_min_area_ha:
             continue
 
         vals = prospectivity_01[ys, xs]
@@ -215,7 +231,11 @@ def extract_prioritized_targets(
 
     geojson_fc = {
         "type": "FeatureCollection",
-        "metadata": {"effective_threshold": eff_thr, "min_area_ha": min_area_ha},
+        "metadata": {
+            "effective_threshold": eff_thr,
+            "min_area_ha": min_area_ha,
+            "effective_min_area_ha": eff_min_area_ha,
+        },
         "features": features,
     }
     return targets, geojson_fc, csv_buf.getvalue()

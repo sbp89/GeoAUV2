@@ -1,5 +1,5 @@
 """
-Suite de Pruebas Científicas, Visuales e Integración End-to-End — GeoAuV2 v2.2
+Suite de Pruebas Científicas, Visuales, Prefactibilidad e Integración End-to-End — GeoAuV2 v2.3
 """
 from pathlib import Path
 import unittest
@@ -8,6 +8,7 @@ import numpy as np
 
 from backend.core.gee_exporter import generate_gee_javascript
 from backend.core.indices import (
+    build_environmental_mask,
     compute_all_indices,
     render_alluvial_placer_png_b64,
     render_gold_classic_glow_png_b64,
@@ -23,6 +24,7 @@ from backend.core.ml_engine import (
 )
 from backend.core.multisensor_scene import build_multisensor_cube
 from backend.core.normalize import normalize_array
+from backend.core.prospectivity import compute_integrated_prospectivity
 from backend.core.structural import (
     analyze_magnetometry_survey,
     compute_slope_and_lineaments,
@@ -222,7 +224,7 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         r_health = self.client.get("/api/health")
         self.assertEqual(r_health.status_code, 200)
         self.assertEqual(r_health.json()["system"], "GeoAuV2")
-        self.assertEqual(r_health.json()["version"], "2.2.0")
+        self.assertEqual(r_health.json()["version"], "2.3.0")
 
         r_cat = self.client.get("/api/catalog")
         self.assertEqual(r_cat.status_code, 200)
@@ -279,6 +281,87 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         r_root = self.client.get("/")
         self.assertEqual(r_root.status_code, 200)
         self.assertIn("GeoAuV2", r_root.text)
+        self.assertIn("methodologyModal", r_root.text)
+        self.assertIn("mobileBottomNav", r_root.text)
+
+    def test_prefeasibility_rigor_nan_urban_alluvial_isolation_and_audit(self) -> None:
+        # 1. Máscara urbana: mitad roca alterada expuesta, mitad concreto/techo urbano brillante
+        h, w = 20, 20
+        cube = {
+            "S2_B2": np.full((h, w), 0.06),
+            "S2_B3": np.full((h, w), 0.08),
+            "S2_B4": np.full((h, w), 0.14),
+            "S2_B8": np.full((h, w), 0.16),
+            "S2_B8A": np.full((h, w), 0.17),
+            "S2_B11": np.full((h, w), 0.28),
+            "S2_B12": np.full((h, w), 0.18),
+        }
+        # Mitad derecha: firma urbana plana de alto albedo azul
+        cube["S2_B2"][:, 10:] = 0.18
+        cube["S2_B3"][:, 10:] = 0.19
+        cube["S2_B4"][:, 10:] = 0.20
+        cube["S2_B8"][:, 10:] = 0.18
+        cube["S2_B8A"][:, 10:] = 0.18
+        cube["S2_B11"][:, 10:] = 0.22
+        cube["S2_B12"][:, 10:] = 0.20
+
+        idx = compute_all_indices(cube, sensor_mode="sentinel2", aster_swir_available=False)
+        valid_mask, m_stats = build_environmental_mask(cube, idx, mask_urban=True)
+        self.assertTrue(np.all(valid_mask[:, :10]))
+        self.assertFalse(np.any(valid_mask[:, 10:]))
+        self.assertAlmostEqual(float(m_stats["urban_masked_pct"]), 50.0, places=1)
+
+        # 2. Preservación estricta de NaN y aislamiento de ALLUVIAL_POWER en roca dura
+        fav = np.full((h, w), 0.72)
+        fav[:6, :6] = np.nan  # Dosel denso o nube enmascarada
+        slope = np.full((h, w), 6.0)
+        lin = np.full((h, w), 0.65)
+        sgc_m = {"litho_favorability": 0.75, "fault_favorability": 0.70}
+
+        prosp_orog_alv1, _ = compute_integrated_prospectivity(
+            fav, slope, lin, "orogenico_vetas", sgc_m,
+            alluvial_power=np.ones((h, w)), alluvial_active_pct=40.0, strict_evidence_mask=True,
+        )
+        prosp_orog_alv0, _ = compute_integrated_prospectivity(
+            fav, slope, lin, "orogenico_vetas", sgc_m,
+            alluvial_power=np.zeros((h, w)), alluvial_active_pct=0.0, strict_evidence_mask=True,
+        )
+        # NaN bajo bosque/nube jamás debe extrapolarse cuando strict_evidence_mask=True
+        self.assertTrue(np.all(np.isnan(prosp_orog_alv1[:6, :6])))
+        # En vetas orogénicas, alluvial_power no debe alterar ni un decimal de la prospectividad
+        self.assertTrue(np.allclose(prosp_orog_alv1, prosp_orog_alv0, equal_nan=True))
+
+        # En modelo aluvial_placer sí debe activarse el aporte geomorfológico aluvial
+        prosp_placer_hi, _ = compute_integrated_prospectivity(
+            fav, slope, lin, "aluvial_placer", sgc_m,
+            alluvial_power=np.ones((h, w)), alluvial_active_pct=35.0, strict_evidence_mask=True,
+        )
+        prosp_placer_lo, _ = compute_integrated_prospectivity(
+            fav, slope, lin, "aluvial_placer", sgc_m,
+            alluvial_power=np.zeros((h, w)), alluvial_active_pct=0.0, strict_evidence_mask=True,
+        )
+        self.assertGreater(float(np.nanmean(prosp_placer_hi)), float(np.nanmean(prosp_placer_lo)) + 0.05)
+
+        # 3. Verificación de methodology_audit y trazabilidad en API y reporte HTML
+        r_an = self.client.post("/api/analyze", json={
+            "preset_id": "segovia",
+            "lat": 7.0792,
+            "lon": -74.6988,
+            "roi_size_km": 4.0,
+            "mask_urban": True,
+            "strict_evidence_mask": True,
+            "save_to_cloud": False,
+        })
+        self.assertEqual(r_an.status_code, 200)
+        body = r_an.json()
+        self.assertIn("methodology_audit", body)
+        audit = body["methodology_audit"]
+        self.assertIn("sources_active", audit)
+        self.assertIn("surface_breakdown", audit)
+        self.assertIn("active_equations", audit)
+        self.assertIn("prefeasibility_scope", audit)
+        self.assertGreaterEqual(len(audit["sources_active"]), 4)
+        self.assertIn("Trazabilidad Científica", body["standalone_report_html"])
 
     def test_zero_external_system_traces_in_repository(self) -> None:
         repo_root = Path(__file__).resolve().parent.parent

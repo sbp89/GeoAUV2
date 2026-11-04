@@ -1,6 +1,6 @@
 [project]
 name = "geoauv2"
-version = "2.2.0"
+version = "2.3.0"
 description = "GeoAuV2 — Plataforma Inteligente de Prospección Aurífera Multisensor, IA Espectral y Geofísica 3D"
 requires-python = ">=3.11"
 dependencies = [

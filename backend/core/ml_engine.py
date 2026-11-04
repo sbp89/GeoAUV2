@@ -370,12 +370,31 @@ def _generate_auto_training_rois(
     h, w = ndvi.shape
     roi_map = np.zeros((h, w), dtype=np.int32)
 
-    c6 = np.isfinite(ndvi) & (ndvi >= np.nanpercentile(ndvi, 86))
-    c5 = np.isfinite(clay) & (clay <= np.nanpercentile(clay, 22)) & (gossan <= np.nanpercentile(gossan, 28)) & (~c6)
-    c4 = np.isfinite(prop) & (prop >= np.nanpercentile(prop, 86))
-    c3 = np.isfinite(gossan) & (gossan >= np.nanpercentile(gossan, 87))
-    c2 = np.isfinite(sericite) & (sericite >= np.nanpercentile(sericite, 88))
-    c1 = np.isfinite(clay) & (clay >= np.nanpercentile(clay, 90))
+    if not np.any(np.isfinite(clay)) or not np.any(np.isfinite(ndvi)):
+        classes_info = {
+            1: {"name": "Argílica Avanzada (Alunita / Sílice)", "color": "#e74c3c"},
+            2: {"name": "Alteración Fílica (Cuarzo-Sericita)", "color": "#f39c12"},
+            3: {"name": "Gossan / Óxidos Fe³⁺ (Jarosita-Goethita)", "color": "#d35400"},
+            4: {"name": "Halo Propilítico (Clorita-Epidota)", "color": "#2ecc71"},
+            5: {"name": "Roca Fresca / Suelo Expuesto", "color": "#5d6d7e"},
+            6: {"name": "Cobertura Vegetal", "color": "#27ae60"},
+        }
+        return roi_map, classes_info
+
+    ndvi_p86 = float(np.nanpercentile(ndvi, 86))
+    clay_p22 = float(np.nanpercentile(clay, 22))
+    clay_p90 = float(np.nanpercentile(clay, 90))
+    gos_p28 = float(np.nanpercentile(gossan, 28)) if np.any(np.isfinite(gossan)) else 0.3
+    gos_p87 = float(np.nanpercentile(gossan, 87)) if np.any(np.isfinite(gossan)) else 0.85
+    prop_p86 = float(np.nanpercentile(prop, 86)) if np.any(np.isfinite(prop)) else 0.85
+    ser_p88 = float(np.nanpercentile(sericite, 88)) if np.any(np.isfinite(sericite)) else 0.85
+
+    c6 = np.isfinite(ndvi) & (ndvi >= ndvi_p86)
+    c5 = np.isfinite(clay) & (clay <= clay_p22) & (np.nan_to_num(gossan, nan=0.0) <= gos_p28) & (~c6)
+    c4 = np.isfinite(prop) & (prop >= prop_p86)
+    c3 = np.isfinite(gossan) & (gossan >= gos_p87)
+    c2 = np.isfinite(sericite) & (sericite >= ser_p88)
+    c1 = np.isfinite(clay) & (clay >= clay_p90)
 
     roi_map[c6] = 6
     roi_map[c5] = 5
@@ -413,7 +432,8 @@ def supervised_classify_spectral(
     - Aplica Filtro Mayoritario + Tamizado Sieve
     - Calcula Matriz de Confusión, Precisión Global (OA) e Índice Kappa en validación 70/30.
     """
-    keys = [k for k in stack_keys if k in norm_indices]
+    mineral_keys = [k for k in stack_keys if k in norm_indices and k not in ("ndvi", "ndwi", "ndbi")]
+    keys = list(mineral_keys)
     if "ndvi" in norm_indices and "ndvi" not in keys:
         keys = keys + ["ndvi"]
 
@@ -425,6 +445,13 @@ def supervised_classify_spectral(
         arrays.append(arr)
 
     h, w = arrays[0].shape
+    valid_mineral_2d = (
+        np.all(np.stack([np.isfinite(norm_indices[k]) for k in mineral_keys], axis=-1), axis=-1)
+        if mineral_keys
+        else np.ones((h, w), dtype=bool)
+    )
+    ndvi_raw = norm_indices.get("ndvi")
+
     stack_3d = np.stack(arrays, axis=-1)
     means = np.mean(stack_3d.reshape(-1, len(keys)), axis=0)
     stds = np.where(np.std(stack_3d.reshape(-1, len(keys)), axis=0) > 1e-8, np.std(stack_3d.reshape(-1, len(keys)), axis=0), 1.0)
@@ -445,6 +472,34 @@ def supervised_classify_spectral(
                 roi_map[max(0, row - 1):min(h, row + 2), max(0, col - 1):min(w, col + 2)] = cid
 
     sample_coords = np.where(roi_map.ravel() > 0)[0]
+    if len(sample_coords) < 12 or len(np.unique(roi_map.ravel()[sample_coords])) < 2:
+        algo_label = (
+            "Support Vector Machine (RBF-SVM Multiclase GeoAuV2)"
+            if classifier == "svm"
+            else "Random Forest Mineralógico (35 Árboles GeoAuV2)"
+        )
+        return np.zeros((h, w), dtype=np.int32), {
+            "method": algo_label,
+            "classifier_code": classifier,
+            "stack_keys": keys,
+            "clusters": [],
+            "palette": {},
+            "accuracy_metrics": {
+                "overall_accuracy": 0.0,
+                "kappa": 0.0,
+                "validation_samples": 0,
+                "training_samples": 0,
+                "confusion_matrix": [],
+                "class_labels": [],
+            },
+            "postprocessing": {
+                "majority_filter": apply_majority,
+                "majority_window": majority_window,
+                "sieve_filter": apply_sieve,
+                "sieve_min_pixels": sieve_min_pixels,
+            },
+        }
+
     rng = np.random.default_rng(2026)
     if len(sample_coords) > 650:
         sample_coords = rng.choice(sample_coords, size=650, replace=False)
@@ -470,6 +525,14 @@ def supervised_classify_spectral(
         algo_label = "Random Forest Mineralógico (35 Árboles GeoAuV2)"
 
     labels_2d = all_preds.reshape(h, w)
+    # No extrapolar clases hidrotermales bajo nubes (0) ni bajo dosel arbóreo enmascarado (Clase 6)
+    if ndvi_raw is not None:
+        veg_only = (~valid_mineral_2d) & np.isfinite(ndvi_raw) & (ndvi_raw >= 0.55)
+        no_obs = (~valid_mineral_2d) & (~veg_only)
+        labels_2d[veg_only] = 6
+        labels_2d[no_obs] = 0
+    else:
+        labels_2d[~valid_mineral_2d] = 0
     if apply_majority:
         labels_2d = apply_majority_filter_2d(labels_2d, window_size=majority_window)
     if apply_sieve:

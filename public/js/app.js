@@ -21,20 +21,23 @@ const state = {
   isDragging3d: false,
   dragLastX: 0,
   dragLastY: 0,
+  isPeekingBase: false,
+  activeMethodTab: "sources",
+  mobileView: "map",
   loadingTimer: null,
   nominatimTimer: null,
 };
 
 const I18N = {
   es: {
-    subtitle: "Prospección Aurífera Multisensor · IA & Geofísica 3D",
+    subtitle: "Prefactibilidad Aurífera Multisensor · COG 16-bit & Geofísica 3D",
     district: "Distrito:",
     run_btn: "Analizar Oro (Ctrl+R)",
     s1: "Zona & Sat", s2: "Índices", s3: "Stack IA", s4: "IA Mineral",
     s5: "Modelo Au", s6: "Geofísica", s7: "Focos Au", s8: "Validación", s9: "Informes",
   },
   en: {
-    subtitle: "Multisensor Gold Prospecting · AI & 3D Geophysics",
+    subtitle: "Multisensor Gold Pre-Feasibility · 16-bit COG & 3D Geophysics",
     district: "District:",
     run_btn: "Analyze Gold (Ctrl+R)",
     s1: "Zone & Sat", s2: "Indices", s3: "AI Stack", s4: "Mineral AI",
@@ -150,6 +153,14 @@ let rubberBandLine = null;
 document.addEventListener("DOMContentLoaded", async () => {
   initMap();
   bindUIEvents();
+  if (window.innerWidth <= 560) {
+    const legBody = document.getElementById("legendBody");
+    const legBtn = document.getElementById("btnToggleLegend");
+    if (legBody && legBtn) {
+      legBody.classList.add("hidden");
+      legBtn.textContent = "+";
+    }
+  }
   updateDmsTelemetry();
   await Promise.all([checkHealth(), loadCatalog()]);
   await runPipeline();
@@ -321,14 +332,59 @@ function bindUIEvents() {
     });
   });
 
-  // Selector de Mapa Base y Capa Ráster
+  // Selector de Mapa Base, Capa Ráster, Pastillas Rápidas y Botón Peek Roca Base
   document.getElementById("selBaseMap").addEventListener("change", (e) => switchBaseMap(e.target.value));
   document.getElementById("selRasterLayer").addEventListener("change", () => {
+    const val = document.getElementById("selRasterLayer").value;
+    syncQuickLayerPills(val);
     updateActiveRasterOverlay();
-    updateLegendForLayer(document.getElementById("selRasterLayer").value);
+    updateLegendForLayer(val);
   });
-  document.getElementById("rngOpacity").addEventListener("input", () => {
+  document.querySelectorAll("#quickLayerBar .ql-pill").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      const lyr = pill.dataset.layer;
+      const sel = document.getElementById("selRasterLayer");
+      sel.value = lyr;
+      syncQuickLayerPills(lyr);
+      updateActiveRasterOverlay();
+      updateLegendForLayer(lyr);
+    });
+  });
+
+  const startPeekBase = (ev) => {
+    if (ev && ev.cancelable) ev.preventDefault();
+    if (state.isPeekingBase) return;
+    state.isPeekingBase = true;
+    const btn = document.getElementById("btnPeekBase");
+    if (btn) {
+      btn.classList.add("peeking");
+      btn.textContent = "👁️ Viendo Roca...";
+    }
+    if (rasterOverlay) rasterOverlay.setOpacity(0.03);
+  };
+  const stopPeekBase = () => {
+    if (!state.isPeekingBase) return;
+    state.isPeekingBase = false;
+    const btn = document.getElementById("btnPeekBase");
+    if (btn) {
+      btn.classList.remove("peeking");
+      btn.textContent = "👁️ Ver Roca Base";
+    }
     if (rasterOverlay) {
+      rasterOverlay.setOpacity(Number(document.getElementById("rngOpacity").value) / 100);
+    }
+  };
+  const peekBtn = document.getElementById("btnPeekBase");
+  if (peekBtn) {
+    peekBtn.addEventListener("mousedown", startPeekBase);
+    peekBtn.addEventListener("touchstart", startPeekBase, { passive: false });
+    ["mouseup", "mouseleave", "touchend", "touchcancel"].forEach((evtName) => {
+      peekBtn.addEventListener(evtName, stopPeekBase);
+    });
+  }
+
+  document.getElementById("rngOpacity").addEventListener("input", () => {
+    if (rasterOverlay && !state.isPeekingBase) {
       rasterOverlay.setOpacity(Number(document.getElementById("rngOpacity").value) / 100);
     }
   });
@@ -446,14 +502,35 @@ function bindUIEvents() {
   bindOmniboxSearch();
 
   document.getElementById("selIndexInspect").addEventListener("change", renderSelectedIndexStats);
-  document.getElementById("btnRunPipeline").addEventListener("click", runPipeline);
+  document.getElementById("btnRunPipeline").addEventListener("click", () => {
+    if (window.innerWidth <= 960) switchMobileView("map");
+    runPipeline();
+  });
 
-  // Atajo Ctrl+R
+  // Atajos de Teclado: Ctrl+R (Analizar), Espacio (Ver Roca Base), Escape (Cerrar Modales)
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") {
       e.preventDefault();
       runPipeline();
+      return;
     }
+    if (e.key === "Escape") {
+      ["methodologyModal", "guideModal", "cloudModal"].forEach((mid) => {
+        document.getElementById(mid)?.classList.add("hidden");
+      });
+      return;
+    }
+    const tag = (document.activeElement?.tagName || "").toUpperCase();
+    const anyModalOpen = ["methodologyModal", "guideModal", "cloudModal"].some(
+      (mid) => !document.getElementById(mid)?.classList.contains("hidden")
+    );
+    if (e.code === "Space" && !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(tag) && !anyModalOpen) {
+      e.preventDefault();
+      startPeekBase();
+    }
+  });
+  document.addEventListener("keyup", (e) => {
+    if (e.code === "Space") stopPeekBase();
   });
 
   // Tema e Idioma
@@ -516,7 +593,7 @@ function bindUIEvents() {
     btn.textContent = state.measureMode ? "📏 Marque A → B en Mapa" : "📏 Rumbo / Corte A–B";
   });
 
-  // Magnetometría 3D interactiva
+  // Magnetometría 3D interactiva (Ratón + Táctil Móvil)
   document.getElementById("btnRunMag").addEventListener("click", () => runMagnetometry(false));
   const magCanvas = document.getElementById("mag3dCanvas");
   magCanvas.addEventListener("mousedown", (e) => {
@@ -524,7 +601,15 @@ function bindUIEvents() {
     state.dragLastX = e.clientX;
     state.dragLastY = e.clientY;
   });
+  magCanvas.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 1) {
+      state.isDragging3d = true;
+      state.dragLastX = e.touches[0].clientX;
+      state.dragLastY = e.touches[0].clientY;
+    }
+  }, { passive: true });
   window.addEventListener("mouseup", () => { state.isDragging3d = false; });
+  window.addEventListener("touchend", () => { state.isDragging3d = false; });
   window.addEventListener("mousemove", (e) => {
     if (!state.isDragging3d || !state.magResult) return;
     const dx = e.clientX - state.dragLastX;
@@ -535,6 +620,17 @@ function bindUIEvents() {
     state.magRotPitch = Math.max(0.2, Math.min(1.25, state.magRotPitch + dy * 0.01));
     drawMagnetometry3D();
   });
+  magCanvas.addEventListener("touchmove", (e) => {
+    if (!state.isDragging3d || !state.magResult || e.touches.length !== 1) return;
+    if (e.cancelable) e.preventDefault();
+    const dx = e.touches[0].clientX - state.dragLastX;
+    const dy = e.touches[0].clientY - state.dragLastY;
+    state.dragLastX = e.touches[0].clientX;
+    state.dragLastY = e.touches[0].clientY;
+    state.magRotYaw += dx * 0.014;
+    state.magRotPitch = Math.max(0.2, Math.min(1.25, state.magRotPitch + dy * 0.012));
+    drawMagnetometry3D();
+  }, { passive: false });
 
   // Exportaciones Directas a Campo (.GPX, .KML, .GeoJSON, .CSV, .geoau, PDF/HTML)
   document.getElementById("btnExportGpx").addEventListener("click", exportTargetsGpx);
@@ -588,7 +684,21 @@ function bindUIEvents() {
     downloadTextFile(code, `geoauv2_${tpl}.js`, "application/javascript");
   });
 
-  // Modales Guía y Nube
+  // Modales: Transparencia Metodológica ('¿Qué se usa?'), Guía y Nube + Navegación Móvil
+  ["btnOpenMethodology", "btnOpenMethodFromStep1", "btnOpenMethodFromDrawer"].forEach((bid) => {
+    document.getElementById(bid)?.addEventListener("click", () => openMethodologyModal("sources"));
+  });
+  document.getElementById("btnCloseMethodology")?.addEventListener("click", () => {
+    document.getElementById("methodologyModal").classList.add("hidden");
+  });
+  document.querySelectorAll("#methodTabsBar .mtab-btn").forEach((tb) => {
+    tb.addEventListener("click", () => {
+      state.activeMethodTab = tb.dataset.mtab;
+      document.querySelectorAll("#methodTabsBar .mtab-btn").forEach((b) => b.classList.toggle("active", b === tb));
+      renderMethodologyTab(state.activeMethodTab);
+    });
+  });
+
   document.getElementById("btnOpenGuide").addEventListener("click", () => {
     document.getElementById("guideModal").classList.remove("hidden");
   });
@@ -598,6 +708,57 @@ function bindUIEvents() {
   document.getElementById("btnCloudHistory").addEventListener("click", openCloudModal);
   document.getElementById("btnCloseModal").addEventListener("click", () => {
     document.getElementById("cloudModal").classList.add("hidden");
+  });
+
+  // Cerrar cualquier modal haciendo clic en el fondo oscuro exterior
+  ["methodologyModal", "guideModal", "cloudModal"].forEach((mid) => {
+    const el = document.getElementById(mid);
+    el?.addEventListener("click", (ev) => {
+      if (ev.target === el) el.classList.add("hidden");
+    });
+  });
+
+  // Barra Inferior Móvil y Botón Volver al Mapa
+  document.querySelectorAll("#mobileBottomNav .mnav-btn").forEach((mb) => {
+    mb.addEventListener("click", () => {
+      const vw = mb.dataset.mview;
+      if (vw === "method") {
+        openMethodologyModal("sources");
+      } else {
+        switchMobileView(vw);
+      }
+    });
+  });
+  document.getElementById("btnCloseLeftMobile")?.addEventListener("click", () => switchMobileView("map"));
+}
+
+function switchMobileView(view) {
+  state.mobileView = view;
+  const ws = document.getElementById("mainWorkspace");
+  ws.classList.remove("mview-left", "mview-right");
+  if (view === "left") ws.classList.add("mview-left");
+  else if (view === "right") ws.classList.add("mview-right");
+
+  document.querySelectorAll("#mobileBottomNav .mnav-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.mview === view);
+  });
+
+  setTimeout(() => {
+    if (view === "map") {
+      map.invalidateSize();
+    } else if (view === "right" && state.analysis) {
+      drawFourPillarRadar(state.analysis.prospectivity_summary?.component_scores);
+      drawCrossSectionProfile();
+    } else if (view === "left") {
+      if (state.analysis) renderSelectedIndexStats();
+      if (state.magResult) drawMagnetometry3D();
+    }
+  }, 120);
+}
+
+function syncQuickLayerPills(layerKey) {
+  document.querySelectorAll("#quickLayerBar .ql-pill").forEach((p) => {
+    p.classList.toggle("active", p.dataset.layer === layerKey);
   });
 }
 
@@ -722,6 +883,9 @@ function jumpToLocation(lat, lon, labelName, modelOverride, autoRun = true) {
   }
   state.customTransect = null;
   updateDmsTelemetry();
+  if (window.innerWidth <= 960) {
+    switchMobileView("map");
+  }
   map.flyTo([lat, lon], 14, { duration: 0.75 });
   if (autoRun) {
     runPipeline(labelName);
@@ -786,6 +950,7 @@ function activateStep(stepNum) {
   else if (stepNum === "4") sel.value = "ml_clusters";
   else if (stepNum === "5") sel.value = "favorability";
   else if (stepNum === "6" || stepNum === "7") sel.value = "gold_hotspots";
+  syncQuickLayerPills(sel.value);
   updateActiveRasterOverlay();
   updateLegendForLayer(sel.value);
 }
@@ -876,6 +1041,7 @@ function buildAnalysisPayload(customProjectName = null) {
     ndvi_threshold: Number(document.getElementById("inpNdviThr").value),
     mask_water: document.getElementById("chkMaskWater").checked,
     mask_shadows: document.getElementById("chkMaskShadow").checked,
+    mask_urban: document.getElementById("chkMaskUrban")?.checked ?? true,
     norm_method: document.getElementById("inpNormMethod").value,
     selected_stack_keys: getSelectedStackKeys(),
     ml_method: document.getElementById("inpMlMethod").value,
@@ -887,6 +1053,7 @@ function buildAnalysisPayload(customProjectName = null) {
     training_samples: state.userSamples,
     deposit_model: document.getElementById("inpDepositModel").value,
     strict_nan: document.getElementById("chkStrictNan").checked,
+    strict_evidence_mask: document.getElementById("chkStrictEvidence")?.checked ?? true,
     target_threshold: Number(document.getElementById("inpTargetThr").value),
     min_target_area_ha: Number(document.getElementById("inpMinAreaHa").value),
     validation_buffer_m: Number(document.getElementById("inpValBuffer").value),
@@ -901,10 +1068,10 @@ function startLoadingProgress() {
   loader.classList.remove("hidden");
 
   const steps = [
-    [22, "Ensamblando mosaico satelital libre de nubes HD (Sentinel-2 / Óptico)..."],
-    [48, "Consultando fallas y ocurrencias del Servicio Geológico (SGC) y Catastro ANM..."],
-    [72, "Calculando 27 índices mineralógicos y clasificación IA de alteraciones..."],
-    [90, "Delimitando focos de oro (P1/P2), isolíneas y estado jurídico por blanco..."],
+    [24, "Leyendo reflectancia orbital real de 16 bits (Sentinel-2 L2A COG BOA + máscara SCL)..."],
+    [50, "Descargando DEM radar Copernicus GLO-30 (30 m) y consultando SGC / ANM..."],
+    [74, "Calculando cocientes mineralógicos con compuerta física y clasificación IA..."],
+    [92, "Delimitando focos de oro en afloramientos reales y auditando trazabilidad..."],
   ];
   let idx = 0;
   bar.style.width = "16%";
@@ -994,12 +1161,14 @@ function renderAllAnalysisViews(data) {
   renderTargetCardsList(targets, "execHotspotsList", 6);
   renderTargetCardsList(targets, "targetsList", 25);
 
-  // 3. Paso 1: Cascada y Trazabilidad
+  // 3. Paso 1 + Drawer Derecho: Apartados Informativos '¿Qué se está usando?' y Cobertura Observable
+  renderTransparencySections(data);
+
   const ms = diag.mask_stats || {};
   document.getElementById("cascadeBadges").innerHTML = `
-    <span class="pill">${diag.optical_source || "Mosaico Sin Nubes"}</span>
-    <span class="pill">SWIR: ${diag.aster_swir_available ? "14 Bandas" : "Cascada S2+L8"}</span>
-    <span class="pill">Suelo/Roca Analizable: ${ms.valid_rock_soil_pct || 0}%</span>
+    <span class="pill">${diag.cog_real ? "🟢 COG 16-bit Real" : "🟡 Respaldo Óptico"}</span>
+    <span class="pill">SWIR: ${diag.aster_swir_available ? "Archivo ASTER 14B" : "Sentinel-2 L2A Real"}</span>
+    <span class="pill">Roca Observable: ${ms.valid_rock_soil_pct || 0}%</span>
   `;
   document.getElementById("cascadeLogs").innerHTML = (diag.cascade_logs || [])
     .map((l) => `<li>${l}</li>`)
@@ -1201,8 +1370,260 @@ function renderTargetCardsList(targets, containerId, maxCount) {
 }
 
 window.zoomToTarget = function (lat, lon) {
-  map.flyTo([lat, lon], 16, { duration: 0.75 });
+  if (window.innerWidth <= 960) {
+    switchMobileView("map");
+  }
+  setTimeout(() => {
+    map.flyTo([lat, lon], 16, { duration: 0.75 });
+  }, 80);
 };
+
+/* ============================================================================
+   4B. Transparencia Metodológica en Vivo ('¿Qué se está usando?')
+   ============================================================================ */
+function renderCoverageStackedBarHtml(surf) {
+  const s = surf || {};
+  const rock = Math.max(0, Number(s.valid_rock_soil_pct || 0));
+  const veg = Math.max(0, Number(s.vegetation_masked_pct || 0));
+  const cloud = Math.max(0, Number(s.cloud_nodata_pct || 0));
+  const urban = Math.max(0, Number(s.urban_masked_pct || 0));
+  const water = Math.max(0, Number(s.water_masked_pct || 0) + Number(s.shadow_masked_pct || 0));
+  const sum = Math.max(rock + veg + cloud + urban + water, 1);
+
+  const wRock = ((rock / sum) * 100).toFixed(1);
+  const wVeg = ((veg / sum) * 100).toFixed(1);
+  const wCloud = ((cloud / sum) * 100).toFixed(1);
+  const wUrb = (((urban + water) / sum) * 100).toFixed(1);
+
+  const relaxWarn = s.veg_relaxed_warning
+    ? `<div style="margin-top:4px;font-size:10px;color:#fbbf24;">⚠️ Dosel muy denso: umbral NDVI adaptado a ${s.effective_ndvi_threshold} para captar claros expuestos.</div>`
+    : "";
+
+  return `
+    <div class="cov-bar-track" title="Desglose físico de superficie del cuadrante">
+      <div class="cov-seg" style="width:${wRock}%;background:#f59e0b;" title="Roca/Suelo Observable: ${rock}%"></div>
+      <div class="cov-seg" style="width:${wVeg}%;background:#10b981;" title="Vegetación Enmascarada: ${veg}%"></div>
+      <div class="cov-seg" style="width:${wCloud}%;background:#64748b;" title="Nubes/Sombra SCL: ${cloud}%"></div>
+      <div class="cov-seg" style="width:${wUrb}%;background:#38bdf8;" title="Agua/Urbano/Sombra: ${(urban + water).toFixed(1)}%"></div>
+    </div>
+    <div class="cov-legend">
+      <span><i class="cov-dot" style="background:#f59e0b;"></i>Roca/Suelo <b>${rock}%</b></span>
+      <span><i class="cov-dot" style="background:#10b981;"></i>Bosque <b>${veg}%</b></span>
+      <span><i class="cov-dot" style="background:#64748b;"></i>Nubes <b>${cloud}%</b></span>
+      ${urban > 0 ? `<span><i class="cov-dot" style="background:#a855f7;"></i>Urbano <b>${urban}%</b></span>` : ""}
+    </div>
+    ${relaxWarn}
+  `;
+}
+
+function renderTransparencySections(data) {
+  const audit = data.methodology_audit || {};
+  const diag = data.diagnostics || {};
+  const surf = audit.surface_breakdown || diag.mask_stats || {};
+  const isCog = Boolean(audit.cog_real ?? diag.cog_real);
+
+  const dotPill = document.getElementById("tierMiniPill");
+  if (dotPill) {
+    dotPill.textContent = isCog ? "16b" : "Alt";
+    dotPill.classList.toggle("fallback", !isCog);
+  }
+
+  const tierBanner = document.getElementById("execTierBanner");
+  if (tierBanner) {
+    tierBanner.className = "tier-banner" + (isCog ? "" : " fallback");
+    const stac = diag.stac_scene || {};
+    tierBanner.innerHTML = isCog
+      ? `🟢 <strong>Reflectancia Orbital 16-bit Real (COG BOA)</strong><br><span style="font-weight:500;opacity:0.92;">Escena ${stac.scene_id || "Sentinel-2 L2A"} (${stac.date || ""}) + DEM Radar 30m</span>`
+      : `🟡 <strong>${audit.data_authenticity_tier || "Mosaico Multitemporal Calibrado"}</strong>`;
+  }
+
+  const covHtml = renderCoverageStackedBarHtml(surf);
+  const execCov = document.getElementById("execCoverageBarWrap");
+  const step1Cov = document.getElementById("step1CoverageBarWrap");
+  if (execCov) execCov.innerHTML = covHtml;
+  if (step1Cov) step1Cov.innerHTML = covHtml;
+
+  const miniWrap = document.getElementById("execActiveSourcesMini");
+  if (miniWrap && audit.sources_active) {
+    miniWrap.innerHTML = audit.sources_active
+      .slice(0, 5)
+      .map(
+        (s) => `<div class="source-mini-row">
+          <span>${s.category}: <strong style="color:var(--text-main);">${s.name.split("(")[0].trim()}</strong></span>
+          <span class="status-chip ${s.status}">${s.badge}</span>
+        </div>`
+      )
+      .join("");
+  }
+
+  const step2Strip = document.getElementById("step2UsingStrip");
+  if (step2Strip) {
+    const eqCount = Object.keys(data.indices_stats || {}).length;
+    step2Strip.innerHTML = `<strong>🔬 En uso ahora:</strong> ${eqCount} índices calculados con división segura <code>sdiv</code>, escalamiento <code>${audit.active_filters?.norm_method || "p2_p98"}</code> y compuerta física P90 sobre el <strong>${surf.valid_rock_soil_pct ?? 0}%</strong> de roca/suelo expuesto.`;
+  }
+
+  const step5Strip = document.getElementById("step5UsingStrip");
+  if (step5Strip) {
+    const strictOn = audit.active_filters?.strict_evidence_mask !== false;
+    step5Strip.innerHTML = `<strong>⚖️ En uso (${audit.deposit_model_label || ""}):</strong> ${
+      strictOn
+        ? "Evidencia Estricta ACTIVA — los píxeles bajo bosque denso, nubes SCL o cascos urbanos se conservan como <code>NaN</code> sin inventar blancos."
+        : "Modo Extrapolación Estructural activo — proyecta lineamientos bajo cobertura vegetal (menor certeza)."
+    }`;
+  }
+
+  const optBadge = document.getElementById("opticalSourceBadge");
+  if (optBadge) {
+    optBadge.textContent = isCog ? "COG 16-bit + DEM 30m" : "Respaldo Óptico";
+  }
+
+  if (!document.getElementById("methodologyModal")?.classList.contains("hidden")) {
+    renderMethodologyTab(state.activeMethodTab);
+  }
+}
+
+function openMethodologyModal(defaultTab = "sources") {
+  state.activeMethodTab = defaultTab;
+  document.querySelectorAll("#methodTabsBar .mtab-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.mtab === defaultTab);
+  });
+  renderMethodologyTab(defaultTab);
+  document.getElementById("methodologyModal")?.classList.remove("hidden");
+}
+
+function renderMethodologyTab(tab) {
+  const body = document.getElementById("methodologyModalBody");
+  if (!body) return;
+  const audit = state.analysis?.methodology_audit;
+  const diag = state.analysis?.diagnostics || {};
+
+  if (!audit) {
+    body.innerHTML = `<div class="info-banner">Ejecute o espere la finalización del análisis para inspeccionar las fuentes activas en el cuadrante.</div>`;
+    return;
+  }
+
+  if (tab === "sources") {
+    const cards = (audit.sources_active || [])
+      .map(
+        (s) => `<div class="method-source-card">
+          <div class="row-between" style="margin-bottom:5px;">
+            <span style="font-size:10.5px;text-transform:uppercase;color:var(--accent);font-weight:800;">${s.category}</span>
+            <span class="status-chip ${s.status}">${s.badge}</span>
+          </div>
+          <div style="font-weight:800;font-size:13px;margin-bottom:4px;">${s.name}</div>
+          <div style="color:var(--text-muted);font-size:11.5px;">${s.detail}</div>
+        </div>`
+      )
+      .join("");
+
+    body.innerHTML = `
+      <div class="tier-banner ${audit.cog_real ? "" : "fallback"}" style="margin-bottom:10px;">
+        <strong>Nivel de Autenticidad Activo:</strong> ${audit.data_authenticity_tier}
+      </div>
+      ${renderCoverageStackedBarHtml(audit.surface_breakdown)}
+      <div class="method-source-grid">${cards}</div>
+    `;
+    return;
+  }
+
+  if (tab === "equations") {
+    const eqRows = (audit.active_equations || [])
+      .map(
+        (eq) => `<tr>
+          <td><strong>${eq.name}</strong><br><small style="color:var(--text-muted);">${eq.key}</small></td>
+          <td><span class="pill">${eq.sensor}</span></td>
+          <td><code class="formula-pill">${eq.formula}</code></td>
+          <td>${eq.mineral}</td>
+          <td><strong>${eq.weight_pct}%</strong></td>
+        </tr>`
+      )
+      .join("");
+
+    body.innerHTML = `
+      <p class="muted-note">
+        <strong>Fuente de Ponderación Activa:</strong> ${audit.weight_source}. Todos los cocientes emplean división segura
+        <code>sdiv(num, den)</code> (<code>|den| &le; 1e-6 &rarr; NaN</code>) y una <strong>Compuerta Física de Amplitud Mineralógica (P90)</strong>
+        que evita inflar terrenos estériles durante el estiramiento por percentiles.
+      </p>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>Índice Activo</th><th>Sensor</th><th>Ecuación Física</th><th>Mineral / Ensamblaje</th><th>Peso</th></tr>
+          </thead>
+          <tbody>${eqRows || "<tr><td colspan='5'>Sin ecuaciones activas</td></tr>"}</tbody>
+        </table>
+      </div>
+    `;
+    return;
+  }
+
+  if (tab === "ai") {
+    const ml = state.analysis?.ml_summary || {};
+    const pil = audit.integrated_pillars_pct || {};
+    const flt = audit.active_filters || {};
+    body.innerHTML = `
+      <div class="method-source-grid">
+        <div class="method-source-card">
+          <div style="font-weight:800;color:var(--accent);margin-bottom:5px;">1. Clasificador IA en Uso</div>
+          <p class="muted-note" style="margin:0;">
+            <strong>Algoritmo:</strong> ${ml.method || "K-Means++"}<br>
+            <strong>Bandas de Entrada:</strong> ${(ml.stack_keys || []).join(", ")}<br>
+            <strong>Limpieza Espacial:</strong> Filtro Modal (${flt.mask_vegetation ? "NDVI &le; " + flt.ndvi_threshold : "Sin filtro NDVI"}) + Tamizado Sieve.<br>
+            <strong>No Extrapolación:</strong> Los píxeles sin medición mineral válida permanecen en clase <code>0</code> (transparente) o vegetación (<code>6</code>).
+          </p>
+        </div>
+        <div class="method-source-card">
+          <div style="font-weight:800;color:var(--accent);margin-bottom:5px;">2. Fusión Difusa–Lineal de 4 Pilares (MPI)</div>
+          <p class="muted-note" style="margin:0;">
+            • Favorabilidad Espectral Mineral: <strong>${pil.spectral}%</strong><br>
+            • Control Morfoestructural DEM 30m: <strong>${pil.structural}%</strong><br>
+            • Contexto Geológico y Fallas SGC: <strong>${pil.geological_sgc}%</strong><br>
+            • Respuesta Geofísica / Lineamientos Mag.: <strong>${pil.geophysical}%</strong><br>
+            <em>Compuerta espectral activa: la topografía nunca genera anomalías por sí sola en roca espectralmente estéril.</em>
+          </p>
+        </div>
+        <div class="method-source-card">
+          <div style="font-weight:800;color:var(--accent);margin-bottom:5px;">3. Aislamiento Estricto Veta vs. Aluvial</div>
+          <p class="muted-note" style="margin:0;">
+            El índice de barras de grava y pozas (<code>ALLUVIAL_POWER</code>, restringido a pendientes &le; 9.5°)
+            sólo interviene cuando el modelo seleccionado es <strong>Placeres Aluviales</strong>. En modelos de veta, epitermal o pórfido su aporte es exactamente <strong>0%</strong>.
+          </p>
+        </div>
+        <div class="method-source-card">
+          <div style="font-weight:800;color:var(--accent);margin-bottom:5px;">4. Filtro Urbano y Convolución Normalizada</div>
+          <p class="muted-note" style="margin:0;">
+            Filtro Urbano: <strong>${flt.mask_urban ? "ACTIVO" : "Inactivo"}</strong> · Evidencia Estricta NaN: <strong>${flt.strict_evidence_mask ? "ACTIVA" : "Inactiva"}</strong>.<br>
+            Las capas visuales se remuestrean con <code>resample(val&middot;mask)/resample(mask)</code> para no difuminar vetas angostas ni sangrar bordes sobre bosque.
+          </p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // tab === "scope"
+  const sc = audit.prefeasibility_scope || {};
+  const directList = (sc.measures_directly || []).map((x) => `<li>${x}</li>`).join("");
+  const groundList = (sc.requires_ground_verification || []).map((x) => `<li>${x}</li>`).join("");
+  body.innerHTML = `
+    <div class="using-strip" style="margin-bottom:10px;">
+      <strong>Etapa del Estudio:</strong> ${sc.stage || "Prefactibilidad Temprana y Selección de Blancos"}
+    </div>
+    <div class="scope-cols">
+      <div class="method-source-card" style="border-color:rgba(16,185,129,0.4);">
+        <strong style="color:#34d399;font-size:13px;">✅ Lo que el satélite mide directamente con alta fiabilidad</strong>
+        <ul class="diag-list" style="margin-top:8px;">${directList}</ul>
+      </div>
+      <div class="method-source-card" style="border-color:rgba(245,158,11,0.45);">
+        <strong style="color:var(--accent-bright);font-size:13px;">🛠️ Lo que exige verificación terrestre obligatoria</strong>
+        <ul class="diag-list" style="margin-top:8px;">${groundList}</ul>
+      </div>
+    </div>
+    <p class="muted-note" style="margin-top:12px;padding:9px 11px;background:var(--bg-card);border-radius:8px;border-left:3px solid var(--accent);">
+      <strong>Nota de Rigor Geocientífico:</strong> ${sc.disclaimer || ""}
+    </p>
+  `;
+}
 
 window.copyGpsPair = function (lat, lon, label) {
   const dms = `${decimalToDms(lat, true)} ${decimalToDms(lon, false)}`;
@@ -2241,12 +2662,14 @@ async function openCloudModal() {
 
     wrap.innerHTML = `
       <h3 style="margin:6px 0;">Últimas Corridas Analíticas (${runsData.count}) — <small style="color:var(--accent);">Clic en una fila para reabrir zona</small></h3>
-      <table class="data-table">
-        <thead>
-          <tr><th>Fecha UTC</th><th>Zona Explorada</th><th>Sensor</th><th>MPI</th><th>Focos Au</th><th>Kappa</th></tr>
-        </thead>
-        <tbody>${rowsHtml || "<tr><td colspan='6'>Sin registros aún</td></tr>"}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>Fecha UTC</th><th>Zona Explorada</th><th>Sensor</th><th>MPI</th><th>Focos Au</th><th>Kappa</th></tr>
+          </thead>
+          <tbody>${rowsHtml || "<tr><td colspan='6'>Sin registros aún</td></tr>"}</tbody>
+        </table>
+      </div>
       <p class="muted-note" style="margin-top:10px;">Proyectos guardados: <strong>${projsData.count}</strong></p>
     `;
   } catch (err) {
