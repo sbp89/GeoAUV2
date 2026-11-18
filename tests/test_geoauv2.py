@@ -204,8 +204,10 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         self.assertTrue(d_ocean["diagnostics"]["is_open_ocean"])
         self.assertLessEqual(d_ocean["prospectivity_summary"]["mpi"], 5.0)
         self.assertEqual(d_ocean["prospectivity_summary"]["classification_code"], "Q4")
+        self.assertFalse(d_ocean["prospectivity_summary"]["gold_verdict"]["has_gold_evidence"])
+        self.assertEqual(d_ocean["prospectivity_summary"]["gold_verdict"]["level_code"], "SIN_EVIDENCIA")
 
-        # Distrito aluvial Bajo Cauca debe activar capa aluvial y prospectividad alta
+        # Distrito aluvial Bajo Cauca debe activar capa aluvial, prospectividad alta y veredicto positivo
         r_alv = self.client.post("/api/analyze", json={
             "preset_id": "bajo_cauca",
             "lat": 7.5920,
@@ -219,6 +221,7 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         self.assertIn("alluvial_placer", d_alv["raster_overlays"])
         self.assertIn("gold_hotspots", d_alv["raster_overlays"])
         self.assertGreater(d_alv["prospectivity_summary"]["mpi"], 45.0)
+        self.assertTrue(d_alv["prospectivity_summary"]["gold_verdict"]["has_gold_evidence"])
 
     def test_api_endpoints_and_cascade_vs_negative_control(self) -> None:
         r_health = self.client.get("/api/health")
@@ -253,6 +256,16 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         self.assertEqual(r_neg.status_code, 200)
         d_neg = r_neg.json()
         self.assertGreater(d_seg["prospectivity_summary"]["mpi"], d_neg["prospectivity_summary"]["mpi"] + 20.0)
+        self.assertTrue(d_seg["prospectivity_summary"]["gold_verdict"]["has_gold_evidence"])
+        self.assertFalse(d_neg["prospectivity_summary"]["gold_verdict"]["has_gold_evidence"])
+        self.assertEqual(d_neg["prospectivity_summary"]["gold_verdict"]["level_code"], "SIN_EVIDENCIA")
+
+        tiers = d_seg["prospectivity_summary"]["color_scale_tiers"]
+        self.assertEqual(len(tiers), 5)
+        total_pct = sum(float(t["pct_of_roi"]) for t in tiers)
+        self.assertAlmostEqual(total_pct, 100.0, delta=0.5)
+        total_ha = sum(float(t["area_ha"]) for t in tiers)
+        self.assertAlmostEqual(total_ha, 1600.0, delta=5.0)
 
         r_casc = self.client.post("/api/analyze", json={
             "lat": -17.3620,
@@ -281,6 +294,10 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         r_root = self.client.get("/")
         self.assertEqual(r_root.status_code, 200)
         self.assertIn("GeoAuV2", r_root.text)
+        self.assertIn("simple-mode", r_root.text)
+        self.assertIn("btnToggleSimpleMode", r_root.text)
+        self.assertIn("verdictHeadline", r_root.text)
+        self.assertIn("colorScaleRowsWrap", r_root.text)
         self.assertIn("methodologyModal", r_root.text)
         self.assertIn("mobileBottomNav", r_root.text)
 

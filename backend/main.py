@@ -459,6 +459,7 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         raw_indices=masked_indices,
     )
 
+    roi_area_ha = round((float(req.roi_size_km) ** 2) * 100.0, 2)
     iw_dict = req.integrated_weights.model_dump() if req.integrated_weights else None
     prospectivity_01, prosp_summary = compute_integrated_prospectivity(
         favorability_01=favorability_01,
@@ -472,6 +473,7 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         alluvial_power=cube.get("ALLUVIAL_POWER"),
         alluvial_active_pct=alluvial_active_pct,
         strict_evidence_mask=req.strict_evidence_mask,
+        roi_area_ha=roi_area_ha,
     )
     prosp_summary["structural_stats"] = structural_stats
 
@@ -486,6 +488,21 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         is_open_ocean=is_open_ocean,
     )
 
+    p1_count = sum(1 for t in targets if t["priority_code"] == "P1")
+    free_targets_count = sum(1 for t in targets if t.get("is_free_area", True))
+    gv = prosp_summary.get("gold_verdict")
+    if gv and not is_open_ocean and not is_neg_ctrl:
+        if len(targets) > 0:
+            gv["plain_explanation"] = (
+                f"Se delimitaron {len(targets)} punto(s) crítico(s) de oro 🎯 en el mapa "
+                f"({p1_count} de prioridad máxima P1 y {free_targets_count} en área libre). "
+                + gv["plain_explanation"]
+            )
+        elif gv.get("has_gold_evidence"):
+            gv["plain_explanation"] += (
+                " Las anomalías detectadas son dispersas y no forman todavía un polígono continuo sobre el umbral actual."
+            )
+
     sgc_dep_feats = sgc_vectors.get("depositos", {}).get("features", [])
     validation = validate_targets_statistically(
         targets=targets,
@@ -496,8 +513,6 @@ async def api_analyze(req: AnalysisRequest) -> Dict[str, Any]:
         buffer_m=req.validation_buffer_m,
     )
 
-    p1_count = sum(1 for t in targets if t["priority_code"] == "P1")
-    free_targets_count = sum(1 for t in targets if t.get("is_free_area", True))
     geoai_plan = build_geoai_exploration_plan(
         deposit_model=req.deposit_model,
         mpi=prosp_summary["mpi"],

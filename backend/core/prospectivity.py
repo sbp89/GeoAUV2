@@ -117,6 +117,180 @@ def compute_mineral_favorability(
     return np.clip(fav, 0.0, 1.0), norm_w, weight_source
 
 
+def _build_color_scale_and_verdict(
+    prosp_grid: np.ndarray,
+    evidence_mask: np.ndarray,
+    mpi: float,
+    roi_area_ha: float,
+    is_open_ocean: bool = False,
+    is_negative_control: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Traduce la matriz técnica de prospectividad [0..1] y el índice MPI [0..100] a:
+    1) Escala visual unificada de 5 colores (Rojo, Naranja, Amarillo, Verde, Transparente) con % y hectáreas.
+    2) Veredicto directo en lenguaje cotidiano sobre si existe o no evidencia de depósitos de oro.
+    """
+    total_px = max(int(prosp_grid.size), 1)
+    obs_px = int(np.sum(evidence_mask))
+    valid = np.isfinite(prosp_grid)
+
+    if is_open_ocean:
+        m_muy = np.zeros_like(valid, dtype=bool)
+        m_alta = np.zeros_like(valid, dtype=bool)
+        m_media = np.zeros_like(valid, dtype=bool)
+        m_baja = np.zeros_like(valid, dtype=bool)
+        m_sin = np.ones_like(valid, dtype=bool)
+    else:
+        m_muy = valid & (prosp_grid >= 0.80)
+        m_alta = valid & (prosp_grid >= 0.68) & (prosp_grid < 0.80)
+        m_media = valid & (prosp_grid >= 0.55) & (prosp_grid < 0.68)
+        m_baja = valid & (prosp_grid >= 0.36) & (prosp_grid < 0.55)
+        m_sin = ~(m_muy | m_alta | m_media | m_baja)
+
+    specs = [
+        (
+            "muy_alta",
+            "🔴 Muy Alta — Núcleo de Depósito de Oro 🎯",
+            "Muy Alta (Núcleo)",
+            "80% – 100%",
+            "#ef4444",
+            "Máxima concentración de evidencia aurífera; punto prioritario.",
+            m_muy,
+        ),
+        (
+            "alta",
+            "🟠 Alta — Depósito / Veta Probable",
+            "Alta (Depósito)",
+            "68% – 80%",
+            "#f97316",
+            "Fuerte señal mineral y estructural compatible con mineralización de oro.",
+            m_alta,
+        ),
+        (
+            "media",
+            "🟡 Media — Zona con Indicios",
+            "Media (Indicios)",
+            "55% – 68%",
+            "#eab308",
+            "Alteración mineral moderada alrededor de las zonas principales.",
+            m_media,
+        ),
+        (
+            "baja",
+            "🟢 Baja — Indicio Débil",
+            "Baja (Indicio Débil)",
+            "36% – 55%",
+            "#10b981",
+            "Transición externa o roca con alteración leve.",
+            m_baja,
+        ),
+        (
+            "sin_evidencia",
+            "⬜ Sin Evidencia / Bosque (Transparente)",
+            "Sin Evidencia",
+            "0% – 36%",
+            "#475569",
+            "Terreno estéril o cubierto por vegetación/nubes (se deja transparente en el mapa).",
+            m_sin,
+        ),
+    ]
+
+    tiers: List[Dict[str, Any]] = []
+    area_by_id: Dict[str, float] = {}
+    for tid, lbl, short_lbl, rng_lbl, col_hex, meaning, mask_arr in specs:
+        cnt = int(np.sum(mask_arr))
+        pct_roi = round(100.0 * cnt / total_px, 2)
+        if obs_px > 0:
+            if tid == "sin_evidencia":
+                obs_sin = int(np.sum(mask_arr & evidence_mask))
+                pct_obs = round(100.0 * obs_sin / obs_px, 1)
+            else:
+                pct_obs = round(min(100.0, 100.0 * cnt / obs_px), 1)
+        else:
+            pct_obs = 100.0 if tid == "sin_evidencia" else 0.0
+
+        area_ha = round(float(roi_area_ha) * cnt / total_px, 1)
+        area_by_id[tid] = area_ha
+        tiers.append({
+            "tier_id": tid,
+            "label": lbl,
+            "short_label": short_lbl,
+            "range_label": rng_lbl,
+            "color_hex": col_hex,
+            "meaning": meaning,
+            "pct_of_roi": pct_roi,
+            "pct_of_observable": pct_obs,
+            "area_ha": area_ha,
+        })
+
+    has_gold = bool((not is_open_ocean) and (not is_negative_control) and (mpi >= 45.0))
+    if is_open_ocean or is_negative_control or mpi < 32.0:
+        lvl = "SIN_EVIDENCIA"
+    elif mpi >= 75.0:
+        lvl = "MUY_ALTA"
+    elif mpi >= 58.0:
+        lvl = "ALTA"
+    elif mpi >= 45.0:
+        lvl = "MODERADA"
+    else:
+        lvl = "BAJA"
+
+    semaphore_map = {
+        "MUY_ALTA": "#10b981",
+        "ALTA": "#10b981",
+        "MODERADA": "#f59e0b",
+        "BAJA": "#94a3b8",
+        "SIN_EVIDENCIA": "#94a3b8",
+    }
+    headline_map = {
+        "MUY_ALTA": "✅ SÍ HAY EVIDENCIA MUY ALTA DE DEPÓSITOS DE ORO",
+        "ALTA": "✅ SÍ HAY EVIDENCIA ALTA DE DEPÓSITOS DE ORO",
+        "MODERADA": "⚠️ EVIDENCIA MODERADA DE ORO (POR CONFIRMAR)",
+        "BAJA": "🟡 INDICIOS BAJOS Y AISLADOS DE ORO",
+        "SIN_EVIDENCIA": "❌ NO SE DETECTA EVIDENCIA DE DEPÓSITOS DE ORO",
+    }
+
+    high_ha = round(area_by_id["muy_alta"] + area_by_id["alta"], 1)
+    med_ha = area_by_id["media"]
+    baja_ha = area_by_id["baja"]
+
+    if is_open_ocean:
+        plain_exp = (
+            "La coordenada seleccionada corresponde a mar abierto o cuerpo de agua profundo. "
+            "No existen afloramientos ni depósitos auríferos aprovechables (100% sin evidencia)."
+        )
+    elif lvl == "SIN_EVIDENCIA":
+        plain_exp = (
+            "Los sensores satelitales no detectan señales minerales ni estructurales compatibles con "
+            "depósitos de oro en esta zona; el mapa permanece limpio (transparente) o con valores de fondo estéril."
+        )
+    elif lvl in ("MUY_ALTA", "ALTA"):
+        plain_exp = (
+            f"Se identifican {high_ha:.1f} hectáreas en colores Rojo y Naranja (evidencia Alta a Muy Alta de oro) "
+            f"y {med_ha:.1f} ha en Amarillo alrededor. Revise en el mapa los núcleos rojos/dorados prioritarios."
+        )
+    elif lvl == "MODERADA":
+        plain_exp = (
+            f"Se detectan {high_ha + med_ha:.1f} hectáreas con indicios moderados (Amarillo a Naranja) "
+            "sobre roca o sedimento expuesto. Se recomienda verificar estos puntos directamente en terreno."
+        )
+    else:
+        plain_exp = (
+            f"Solo aparecen señales débiles y dispersas en Verde/Amarillo ({round(med_ha + baja_ha, 1):.1f} ha), "
+            "insuficientes por sí solas para evidenciar un depósito de oro económico."
+        )
+
+    verdict = {
+        "has_gold_evidence": has_gold,
+        "level_code": lvl,
+        "semaphore_color": semaphore_map[lvl],
+        "headline": headline_map[lvl],
+        "score_pct": round(float(mpi), 1),
+        "plain_explanation": plain_exp,
+    }
+    return tiers, verdict
+
+
 def compute_integrated_prospectivity(
     favorability_01: np.ndarray,
     slope_deg: np.ndarray,
@@ -129,6 +303,7 @@ def compute_integrated_prospectivity(
     alluvial_power: np.ndarray | None = None,
     alluvial_active_pct: float = 0.0,
     strict_evidence_mask: bool = True,
+    roi_area_ha: float = 1600.0,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
     Combina Favorabilidad Espectral + Control Morfoestructural DEM + Evidencia Oficial SGC + Geofísica
@@ -148,6 +323,14 @@ def compute_integrated_prospectivity(
     # Rechazo estricto de océano abierto / cuerpo marino profundo
     if is_open_ocean:
         marine_grid = np.full((h, w), 0.02, dtype=np.float64)
+        tiers, verdict = _build_color_scale_and_verdict(
+            prosp_grid=marine_grid,
+            evidence_mask=np.zeros((h, w), dtype=bool),
+            mpi=2.0,
+            roi_area_ha=roi_area_ha,
+            is_open_ocean=True,
+            is_negative_control=False,
+        )
         return marine_grid, {
             "mpi": 2.0,
             "classification_code": "Q4",
@@ -159,6 +342,8 @@ def compute_integrated_prospectivity(
             "prospectivity_p90": 0.03,
             "observable_coverage_pct": 0.0,
             "strict_evidence_mask": strict_evidence_mask,
+            "color_scale_tiers": tiers,
+            "gold_verdict": verdict,
             "component_scores": {
                 "spectral": 2.0,
                 "structural": 1.0,
@@ -279,6 +464,15 @@ def compute_integrated_prospectivity(
         if observable_pct < 15.0:
             conf = "Media (Exposición parcial)"
 
+    color_scale_tiers, gold_verdict = _build_color_scale_and_verdict(
+        prosp_grid=prosp_grid,
+        evidence_mask=evidence_mask,
+        mpi=mpi,
+        roi_area_ha=roi_area_ha,
+        is_open_ocean=False,
+        is_negative_control=is_negative_control,
+    )
+
     summary = {
         "mpi": mpi,
         "classification_code": cls_code,
@@ -290,6 +484,8 @@ def compute_integrated_prospectivity(
         "prospectivity_p90": round(prosp_p90, 4),
         "observable_coverage_pct": observable_pct,
         "strict_evidence_mask": strict_evidence_mask,
+        "color_scale_tiers": color_scale_tiers,
+        "gold_verdict": gold_verdict,
         "component_scores": {
             "spectral": spec_comp,
             "structural": round(float(np.percentile(structural_grid, 85)) * 100.0, 1),

@@ -24,22 +24,23 @@ const state = {
   isPeekingBase: false,
   activeMethodTab: "sources",
   mobileView: "map",
+  simpleMode: true,
   loadingTimer: null,
   nominatimTimer: null,
 };
 
 const I18N = {
   es: {
-    subtitle: "Prefactibilidad Aurífera Multisensor · COG 16-bit & Geofísica 3D",
-    district: "Distrito:",
-    run_btn: "Analizar Oro (Ctrl+R)",
+    subtitle: "Detector Satelital de Depósitos de Oro por Escala de Colores",
+    district: "Zona:",
+    run_btn: "Estudiar Zona",
     s1: "Zona & Sat", s2: "Índices", s3: "Stack IA", s4: "IA Mineral",
     s5: "Modelo Au", s6: "Geofísica", s7: "Focos Au", s8: "Validación", s9: "Informes",
   },
   en: {
-    subtitle: "Multisensor Gold Pre-Feasibility · 16-bit COG & 3D Geophysics",
-    district: "District:",
-    run_btn: "Analyze Gold (Ctrl+R)",
+    subtitle: "Satellite Gold Deposit Detector with Color Scale",
+    district: "Zone:",
+    run_btn: "Analyze Gold",
     s1: "Zone & Sat", s2: "Indices", s3: "AI Stack", s4: "Mineral AI",
     s5: "Au Model", s6: "Geophysics", s7: "Au Hotspots", s8: "Validation", s9: "Reports",
   },
@@ -92,9 +93,9 @@ const MINING_PLACES_DB = [
 
 const LEGEND_CONFIGS = {
   gold_hotspots: {
-    title: "🔥 Focos y Vetas de Oro (Fondo Limpio)",
-    gradient: "linear-gradient(90deg, rgba(16,185,129,0.08) 0%, #10b981 26%, #eab308 54%, #ef4444 80%, #fde047 100%)",
-    ticks: ["Estéril (Transp.)", "Halo 45%", "Veta 66%", "Núcleo >80%"],
+    title: "🔥 Escala de Depósitos de Oro",
+    gradient: "linear-gradient(90deg, rgba(16,185,129,0.08) 0%, #10b981 26%, #eab308 54%, #f97316 74%, #ef4444 88%, #fde047 100%)",
+    ticks: ["Sin Evid.", "Baja 36%", "Media 55%", "Alta 68%", "Muy Alta >80%"],
   },
   prospectivity_thermal: {
     title: "🌈 Geofísica Térmica Aurífera",
@@ -151,6 +152,7 @@ let measureLayerGroup;
 let rubberBandLine = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
+  document.body.classList.toggle("simple-mode", state.simpleMode);
   initMap();
   bindUIEvents();
   if (window.innerWidth <= 560) {
@@ -163,6 +165,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   updateDmsTelemetry();
   await Promise.all([checkHealth(), loadCatalog()]);
+  syncSimpleSelectorsFromTechnical();
   await runPipeline();
   await runMagnetometry(true);
 });
@@ -321,18 +324,44 @@ function bindUIEvents() {
     });
   });
 
-  // Chips Rápidos de Distrito
-  document.querySelectorAll("#quickDistrictChips .chip-btn").forEach((chip) => {
+  // Conmutador Modo Simple vs. Modo Técnico Completo
+  document.getElementById("btnToggleSimpleMode")?.addEventListener("click", () => toggleSimpleExpertMode());
+  document.getElementById("btnFooterOpenTechnical")?.addEventListener("click", () => toggleSimpleExpertMode(false));
+  document.getElementById("btnFooterOpenMethod")?.addEventListener("click", () => openMethodologyModal("sources"));
+
+  // Chips Rápidos de Distrito (Paso 1 y Modo Simple)
+  document.querySelectorAll("#quickDistrictChips .chip-btn, #simpleZoneChips .chip-btn").forEach((chip) => {
     chip.addEventListener("click", () => {
       const pid = chip.dataset.preset;
       const sel = document.getElementById("presetSelect");
       sel.value = pid;
       sel.dispatchEvent(new Event("change"));
-      document.querySelectorAll("#quickDistrictChips .chip-btn").forEach((c) => c.classList.toggle("active", c === chip));
+      syncQuickPresetChips(pid);
     });
   });
 
-  // Selector de Mapa Base, Capa Ráster, Pastillas Rápidas y Botón Peek Roca Base
+  // Selectores Simples en Panel Derecho sincronizados con Controles Técnicos
+  document.getElementById("selSimpleRoiKm")?.addEventListener("change", (e) => {
+    document.getElementById("inpRoiKm").value = e.target.value;
+  });
+  document.getElementById("inpRoiKm")?.addEventListener("change", () => syncSimpleSelectorsFromTechnical());
+
+  document.getElementById("selSimpleGoldType")?.addEventListener("change", (e) => {
+    const val = e.target.value;
+    document.getElementById("inpDepositModel").value = val;
+    document.getElementById("inpDepositModelQuick").value = val;
+    updateDepositDescription();
+    if (val === "aluvial_placer" && state.analysis) {
+      showToast("Buscando oro en cauces y terrazas aluviales (Placer Aluvial).");
+    }
+  });
+
+  document.getElementById("btnSimpleRun")?.addEventListener("click", () => {
+    if (window.innerWidth <= 960) switchMobileView("map");
+    runPipeline();
+  });
+
+  // Selector de Mapa Base, Capa Ráster, Pastillas Rápidas y Botón Peek Terreno Real
   document.getElementById("selBaseMap").addEventListener("change", (e) => switchBaseMap(e.target.value));
   document.getElementById("selRasterLayer").addEventListener("change", () => {
     const val = document.getElementById("selRasterLayer").value;
@@ -358,7 +387,7 @@ function bindUIEvents() {
     const btn = document.getElementById("btnPeekBase");
     if (btn) {
       btn.classList.add("peeking");
-      btn.textContent = "👁️ Viendo Roca...";
+      btn.textContent = "👁️ Viendo Terreno...";
     }
     if (rasterOverlay) rasterOverlay.setOpacity(0.03);
   };
@@ -368,7 +397,7 @@ function bindUIEvents() {
     const btn = document.getElementById("btnPeekBase");
     if (btn) {
       btn.classList.remove("peeking");
-      btn.textContent = "👁️ Ver Roca Base";
+      btn.textContent = "👁️ Ver Terreno Real";
     }
     if (rasterOverlay) {
       rasterOverlay.setOpacity(Number(document.getElementById("rngOpacity").value) / 100);
@@ -427,6 +456,7 @@ function bindUIEvents() {
     sourceEl.addEventListener("change", () => {
       targetEl.value = sourceEl.value;
       updateDepositDescription();
+      syncSimpleSelectorsFromTechnical();
       // Si selecciona placer aluvial, sugerir automáticamente capa aluvial o focos limpios
       if (sourceEl.value === "aluvial_placer" && state.analysis) {
         showToast("Modelo Placer Aluvial seleccionado: priorizando terrazas Q-al, gravas y pozas.");
@@ -449,6 +479,8 @@ function bindUIEvents() {
     state.customTransect = null;
     updateDmsTelemetry();
     updateDepositDescription();
+    syncSimpleSelectorsFromTechnical();
+    syncQuickPresetChips(p.id);
     runPipeline();
     runMagnetometry(true);
   });
@@ -762,6 +794,60 @@ function syncQuickLayerPills(layerKey) {
   });
 }
 
+function syncQuickPresetChips(presetId) {
+  document.querySelectorAll("#quickDistrictChips .chip-btn, #simpleZoneChips .chip-btn").forEach((c) => {
+    c.classList.toggle("active", Boolean(presetId) && c.dataset.preset === presetId);
+  });
+}
+
+function syncSimpleSelectorsFromTechnical() {
+  const roiInp = document.getElementById("inpRoiKm");
+  const roiSel = document.getElementById("selSimpleRoiKm");
+  if (roiInp && roiSel) {
+    const valStr = String(Number(roiInp.value) || 4);
+    const hasOpt = Array.from(roiSel.options).some((o) => o.value === valStr);
+    if (!hasOpt) {
+      const opt = document.createElement("option");
+      opt.value = valStr;
+      opt.textContent = `${valStr} × ${valStr} km`;
+      roiSel.appendChild(opt);
+    }
+    roiSel.value = valStr;
+  }
+
+  const depInp = document.getElementById("inpDepositModel");
+  const depSimple = document.getElementById("selSimpleGoldType");
+  if (depInp && depSimple) {
+    depSimple.value = depInp.value;
+  }
+}
+
+function toggleSimpleExpertMode(forceSimple = null) {
+  state.simpleMode = forceSimple !== null ? Boolean(forceSimple) : !state.simpleMode;
+  document.body.classList.toggle("simple-mode", state.simpleMode);
+
+  const btn = document.getElementById("btnToggleSimpleMode");
+  if (btn) {
+    btn.innerHTML = state.simpleMode
+      ? "<span>🔧 Modo Técnico</span>"
+      : "<span>✨ Volver a Modo Simple</span>";
+    btn.classList.toggle("btn-primary-outline", !state.simpleMode);
+  }
+
+  if (state.simpleMode && state.mobileView === "left") {
+    switchMobileView("map");
+  }
+
+  setTimeout(() => {
+    map.invalidateSize();
+    if (!state.simpleMode && state.analysis) {
+      drawFourPillarRadar(state.analysis.prospectivity_summary?.component_scores);
+      drawCrossSectionProfile();
+      renderSelectedIndexStats();
+    }
+  }, 150);
+}
+
 /* ============================================================================
    3. Buscador Inteligente de Lugares y Conversor Decimal <-> GMS (DMS)
    ============================================================================ */
@@ -880,6 +966,7 @@ function jumpToLocation(lat, lon, labelName, modelOverride, autoRun = true) {
     document.getElementById("inpDepositModel").value = modelOverride;
     document.getElementById("inpDepositModelQuick").value = modelOverride;
     updateDepositDescription();
+    syncSimpleSelectorsFromTechnical();
   }
   state.customTransect = null;
   updateDmsTelemetry();
@@ -1158,6 +1245,9 @@ function renderAllAnalysisViews(data) {
 
   drawFourPillarRadar(prosp.component_scores);
   drawCrossSectionProfile();
+  renderSimpleVerdictAndColorScale(data);
+  syncSimpleSelectorsFromTechnical();
+  syncQuickPresetChips(data.metadata?.preset_id || null);
   renderTargetCardsList(targets, "execHotspotsList", 6);
   renderTargetCardsList(targets, "targetsList", 25);
 
@@ -1328,11 +1418,65 @@ function renderAllAnalysisViews(data) {
   renderMapLayers(data);
 }
 
+function renderSimpleVerdictAndColorScale(data) {
+  const prosp = data.prospectivity_summary || {};
+  const gv = prosp.gold_verdict || {};
+  const lvl = (gv.level_code || "SIN_EVIDENCIA").toLowerCase();
+
+  const headlineEl = document.getElementById("verdictHeadline");
+  if (headlineEl) {
+    headlineEl.textContent = gv.headline || "Resultado no disponible";
+    headlineEl.className = `verdict-banner ${lvl}`;
+  }
+
+  const pctVal = Number(gv.score_pct ?? prosp.mpi ?? 0);
+  const pctStr = `${pctVal.toFixed(0)}%`;
+  const scorePctEl = document.getElementById("verdictScorePct");
+  if (scorePctEl) scorePctEl.textContent = pctStr;
+
+  const meterEl = document.getElementById("verdictMeterFill");
+  if (meterEl) {
+    meterEl.style.width = `${Math.min(100, Math.max(3, pctVal))}%`;
+    meterEl.className = `verdict-meter-fill ${lvl}`;
+  }
+
+  const plainEl = document.getElementById("verdictPlainText");
+  if (plainEl) {
+    plainEl.textContent = gv.plain_explanation || prosp.classification_label || "";
+  }
+
+  const rowsWrap = document.getElementById("colorScaleRowsWrap");
+  if (rowsWrap) {
+    const tiers = prosp.color_scale_tiers || [];
+    rowsWrap.innerHTML = tiers
+      .map((t) => {
+        const wBar = t.pct_of_roi > 0 ? Math.min(100, Math.max(3, Number(t.pct_of_roi))) : 0;
+        const borderStyle = t.tier_id === "muy_alta" ? "border:1.5px solid #fde047;" : "";
+        return `<div class="color-tier-row">
+          <div class="color-tier-top">
+            <span class="color-swatch-pill">
+              <i class="swatch-dot" style="background:${t.color_hex};${borderStyle}"></i>
+              <span>${t.label}</span>
+            </span>
+            <span class="color-tier-pct">${t.area_ha} ha (${Number(t.pct_of_roi).toFixed(1)}%)</span>
+          </div>
+          <div class="color-tier-bar-track">
+            <div class="color-tier-bar-fill" style="width:${wBar}%;background:${t.color_hex};"></div>
+          </div>
+          <div class="color-tier-sub">
+            <span>Escala ${t.range_label} · ${t.meaning}</span>
+          </div>
+        </div>`;
+      })
+      .join("");
+  }
+}
+
 function renderTargetCardsList(targets, containerId, maxCount) {
   const wrap = document.getElementById(containerId);
   if (!wrap) return;
   if (!targets || targets.length === 0) {
-    wrap.innerHTML = `<div class="info-banner">0 focos superan el umbral actual (${document.getElementById("inpTargetThr").value}). Zona estéril o control negativo.</div>`;
+    wrap.innerHTML = `<div class="info-banner">No se delimitaron puntos críticos de oro sobre el umbral en esta zona (terreno sin evidencia mineral continua).</div>`;
     return;
   }
 
@@ -1346,9 +1490,10 @@ function renderTargetCardsList(targets, containerId, maxCount) {
       const legClass = isFree ? "free" : "titled";
       const legIcon = isFree ? "🟢" : "🔵";
       const gmaps = `https://www.google.com/maps?q=${pkLat},${pkLon}`;
+      const tierBadge = pct >= 80 ? "🔴 Muy Alta" : (pct >= 68 ? "🟠 Alta" : (pct >= 55 ? "🟡 Media" : "🟢 Baja"));
       return `<div class="target-card" style="border-left-color:${t.color}" onclick="zoomToTarget(${pkLat}, ${pkLon})">
         <div class="row-between">
-          <strong>🎯 ${t.id || "#" + t.rank} · ${t.priority_code} (${pct}% Au)</strong>
+          <strong>🎯 ${t.id || "#" + t.rank} · ${tierBadge} (${pct}%)</strong>
           <span class="pill">${t.area_ha} ha</span>
         </div>
         <div class="row-between" style="margin-top:4px;">
@@ -1356,12 +1501,12 @@ function renderTargetCardsList(targets, containerId, maxCount) {
           <span class="legal-pill ${legClass}">${legIcon} ${t.legal_state || "Área Libre"}</span>
         </div>
         <div class="mono" style="font-size:10.5px;color:var(--accent);margin-top:4px;">
-          Pico: ${pkLat.toFixed(5)}, ${pkLon.toFixed(5)}
+          GPS: ${pkLat.toFixed(5)}, ${pkLon.toFixed(5)}
         </div>
         <div class="target-actions" onclick="event.stopPropagation();">
-          <button type="button" class="btn-xs" onclick="zoomToTarget(${pkLat}, ${pkLon})">🔍 Zoom</button>
+          <button type="button" class="btn-xs" onclick="zoomToTarget(${pkLat}, ${pkLon})">🔍 Ver</button>
           <button type="button" class="btn-xs" onclick="copyGpsPair(${pkLat}, ${pkLon}, '${t.id || t.rank}')">📋 Copiar GPS</button>
-          <button type="button" class="btn-xs" onclick="profileAcrossPoint(${pkLat}, ${pkLon}, '${t.id || t.rank}')">📈 Corte A–B</button>
+          <button type="button" class="btn-xs expert-only" onclick="profileAcrossPoint(${pkLat}, ${pkLon}, '${t.id || t.rank}')">📈 Corte A–B</button>
           <a href="${gmaps}" target="_blank" rel="noopener" class="btn-xs" style="text-decoration:none;">🧭 Maps ↗</a>
         </div>
       </div>`;
@@ -1830,6 +1975,11 @@ function updateLegendForLayer(layerKey) {
   document.getElementById("legendTitle").textContent = cfg.title;
   document.getElementById("legendGradientBar").style.background = cfg.gradient;
   document.getElementById("legendTicks").innerHTML = cfg.ticks.map((t) => `<span>${t}</span>`).join("");
+
+  const scaleList = document.getElementById("simpleColorScaleLegend");
+  if (scaleList) {
+    scaleList.classList.toggle("hidden", layerKey !== "gold_hotspots");
+  }
 }
 
 /* ============================================================================
@@ -2201,23 +2351,53 @@ function onMapMouseMove(e) {
   const aVal = pi.alluvial_power?.[row]?.[col] ?? 0;
   const nVal = pi.ndvi?.[row]?.[col] ?? -1;
 
-  // Diagnóstico geológico instantáneo bajo el cursor
+  // Diagnóstico claro bajo el cursor (Modo Simple + Técnico)
   const vBadge = document.getElementById("hudVerdictBadge");
+  const simpleCursorEl = document.getElementById("simpleCursorCard");
+  const pPct = pVal >= 0 ? Math.round(pVal * 100) : 0;
+
   if (pVal >= 0.80) {
     vBadge.className = "verdict-pill core";
-    vBadge.textContent = `🔥 NÚCLEO AURÍFERO P1 (${Math.round(pVal * 100)}%)`;
+    vBadge.textContent = `🔴 MUY ALTA (${pPct}%)`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `🔴 <strong>${pPct}% — Evidencia Muy Alta de Oro</strong><br><small>Núcleo prioritario en la escala de colores.</small>`;
+    }
+  } else if (pVal >= 0.68) {
+    vBadge.className = "verdict-pill halo";
+    vBadge.textContent = `🟠 ALTA (${pPct}%)`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `🟠 <strong>${pPct}% — Evidencia Alta de Oro</strong><br><small>Zona probable de depósito o veta.</small>`;
+    }
   } else if (aVal >= 0.45) {
     vBadge.className = "verdict-pill alluvial";
-    vBadge.textContent = `🌊 TERRAZA / PLACER ALUVIAL (${Math.round(aVal * 100)}%)`;
-  } else if (pVal >= 0.58) {
+    vBadge.textContent = `🌊 ALUVIAL (${Math.round(aVal * 100)}%)`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `🌊 <strong>${Math.round(aVal * 100)}% — Grava / Placer Aluvial</strong><br><small>Cauce o terraza fluvial favorable para oro de río.</small>`;
+    }
+  } else if (pVal >= 0.55) {
     vBadge.className = "verdict-pill halo";
-    vBadge.textContent = `⚡ VETA / HALO HIDROTERMAL (${Math.round(pVal * 100)}%)`;
+    vBadge.textContent = `🟡 MEDIA (${pPct}%)`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `🟡 <strong>${pPct}% — Evidencia Media de Oro</strong><br><small>Zona con indicios minerales moderados.</small>`;
+    }
+  } else if (pVal >= 0.36) {
+    vBadge.className = "verdict-pill veg";
+    vBadge.textContent = `🟢 BAJA (${pPct}%)`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `🟢 <strong>${pPct}% — Indicio Débil</strong><br><small>Borde externo o señal mineral leve.</small>`;
+    }
   } else if (nVal >= 0.48) {
     vBadge.className = "verdict-pill veg";
-    vBadge.textContent = `🌿 DOSEL VEGETAL (NDVI ${nVal.toFixed(2)})`;
+    vBadge.textContent = `🌿 BOSQUE (Sin lectura)`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `🌿 <strong>Sin Evidencia (Vegetación Densa)</strong><br><small>El dosel vegetal cubre el suelo o la roca.</small>`;
+    }
   } else {
     vBadge.className = "verdict-pill neutral";
-    vBadge.textContent = `🪨 ROCA DE CAJA / FONDO (${pVal >= 0 ? Math.round(pVal * 100) + "%" : "--"})`;
+    vBadge.textContent = `⬜ SIN EVIDENCIA (${pVal >= 0 ? pPct + "%" : "--"})`;
+    if (simpleCursorEl) {
+      simpleCursorEl.innerHTML = `⬜ <strong>Sin Evidencia de Oro (${pVal >= 0 ? pPct + "%" : "Limpio"})</strong><br><small>Terreno estéril sin señales significativas.</small>`;
+    }
   }
 
   document.getElementById("hudReadout").innerHTML = `

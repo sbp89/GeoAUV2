@@ -12,16 +12,16 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
-<body>
+<body class="simple-mode">
   <!-- Barra Superior Ejecutiva -->
   <header class="topbar">
     <div class="brand-group">
-      <button id="btnToggleLeftPanel" class="btn-icon" title="Mostrar / ocultar panel técnico lateral">☰</button>
+      <button id="btnToggleLeftPanel" class="btn-icon expert-only" title="Mostrar / ocultar panel técnico lateral">☰</button>
       <div class="brand">
         <div class="brand-icon" aria-hidden="true">Au</div>
         <div>
           <div class="brand-title">GeoAuV2 <span class="badge-version">v2.3</span></div>
-          <div class="brand-sub" data-i18n="subtitle">Prefactibilidad Aurífera Multisensor · COG 16-bit &amp; Geofísica 3D</div>
+          <div class="brand-sub" data-i18n="subtitle">Detector Satelital de Depósitos de Oro por Escala de Colores</div>
         </div>
       </div>
     </div>
@@ -33,7 +33,7 @@
         type="text"
         id="inpPlaceSearch"
         autocomplete="off"
-        placeholder="Buscar municipio, río, mina o pegar GPS (ej. Segovia, Río Nechí, Condoto, 7.08,-74.70)..."
+        placeholder="Buscar municipio, río, mina o coordenada GPS (ej. Segovia, Río Nechí, 7.08,-74.70)..."
         aria-label="Buscar ubicación o coordenada"
       />
       <button id="btnMyGps" class="btn-gps-inline" title="Usar mi ubicación GPS actual">📍 GPS</button>
@@ -42,31 +42,35 @@
 
     <div class="topbar-controls">
       <label class="preset-wrap" title="Seleccionar distrito aurífero calibrado o zona de control">
-        <span data-i18n="district">Distrito:</span>
+        <span data-i18n="district">Zona:</span>
         <select id="presetSelect" aria-label="Distrito Aurífero"></select>
       </label>
 
-      <button id="btnRunPipeline" class="btn-primary" title="Analizar potencial aurífero en el cuadrante actual (Ctrl+R)">
+      <button id="btnRunPipeline" class="btn-primary" title="Estudiar evidencia de depósitos de oro en esta zona (Ctrl+R)">
         <span class="pulse-dot"></span>
-        <span data-i18n="run_btn">Analizar Oro (Ctrl+R)</span>
+        <span data-i18n="run_btn">Estudiar Zona</span>
       </button>
 
-      <button id="btnToggleExecDrawer" class="btn-ghost active-drawer-btn hide-sm" title="Mostrar / ocultar Resumen Ejecutivo y Corte A–B">
+      <button id="btnToggleExecDrawer" class="btn-ghost active-drawer-btn hide-sm expert-only" title="Mostrar / ocultar Resumen Ejecutivo y Corte A–B">
         <span>📊 Resumen Au</span>
       </button>
 
-      <button id="btnOpenMethodology" class="btn-ghost btn-methodology" title="Transparencia metodológica: ver sensores, bandas, ecuaciones y alcance en uso">
-        <span>🔬 Qué se usa</span>
+      <button id="btnToggleSimpleMode" class="btn-ghost" title="Cambiar entre Vista Simple y Modo Técnico Avanzado (9 módulos)">
+        <span>🔧 Modo Técnico</span>
+      </button>
+
+      <button id="btnOpenMethodology" class="btn-ghost btn-methodology" title="Ver satélites, sensores y ecuaciones en uso">
+        <span>🔬 Fuentes</span>
         <span id="tierMiniPill" class="tier-dot">16b</span>
       </button>
 
-      <button id="btnCloudHistory" class="btn-ghost" title="Consultar historial y proyectos guardados en la nube">
+      <button id="btnCloudHistory" class="btn-ghost expert-only" title="Consultar historial y proyectos guardados en la nube">
         <span class="hide-xs">☁ Nube</span><span class="show-xs-inline">☁</span>
         <span id="cloudStatusDot" class="status-dot offline"></span>
       </button>
 
-      <button id="btnOpenGuide" class="btn-icon" title="Guía rápida de interpretación de mapas de oro">?</button>
-      <button id="btnLang" class="btn-icon hide-xs" title="Cambiar idioma ES / EN">ES</button>
+      <button id="btnOpenGuide" class="btn-icon" title="Guía visual: cómo leer la escala de colores de oro">?</button>
+      <button id="btnLang" class="btn-icon hide-xs expert-only" title="Cambiar idioma ES / EN">ES</button>
       <button id="btnTheme" class="btn-icon" title="Cambiar tema Oscuro / Claro">☀</button>
     </div>
   </header>
@@ -488,7 +492,7 @@
           </select>
         </label>
 
-        <label class="toolbar-item" title="Visualización temática de anomalías y depósitos de oro">
+        <label class="toolbar-item expert-only" title="Visualización temática de anomalías y depósitos de oro">
           <span>Capa Oro:</span>
           <select id="selRasterLayer">
             <optgroup label="Detección de Depósitos de Oro (Fondo Limpio)">
@@ -519,31 +523,32 @@
           </select>
         </label>
 
-        <label class="toolbar-item" title="Transparencia de la capa de anomalías sobre el satélite">
-          <span>Opacidad:</span>
+        <label class="toolbar-item" title="Intensidad de la escala de colores sobre el terreno satelital">
+          <span>Color:</span>
           <input type="range" id="rngOpacity" min="0" max="100" value="84" />
         </label>
 
-        <div class="vector-toggles">
+        <div class="vector-toggles expert-only">
           <label title="Pines numerados 🎯 y polígonos de focos auríferos"><input type="checkbox" id="chkVecTargets" checked /> 🎯 Focos Au</label>
           <label title="Fallas geológicas SGC"><input type="checkbox" id="chkVecFallas" checked /> ⚡ Fallas</label>
           <label title="Minas y ocurrencias conocidas 🪙"><input type="checkbox" id="chkVecDepositos" checked /> 🪙 Minas</label>
           <label title="Títulos mineros vigentes ANM"><input type="checkbox" id="chkVecAnm" checked /> 📜 ANM</label>
         </div>
 
-        <button type="button" id="btnPeekBase" class="btn-small btn-peek" title="Mantenga presionado (o barra espaciadora) para ver el afloramiento / roca base sin capa encima">👁️ Ver Roca Base</button>
+        <button type="button" id="btnPeekBase" class="btn-small btn-peek" title="Mantenga presionado (o barra espaciadora) para ver el terreno real sin colores encima">👁️ Ver Terreno Real</button>
         <button type="button" id="btnToggleLabels" class="btn-small btn-primary-outline" title="Mostrar u ocultar nombres de municipios, veredas, ríos y distritos">🏷️ Nombres: ON</button>
-        <button type="button" id="btnMeasureDist" class="btn-small" title="Medir distancia, Rumbo Estructural (Azimut) y trazar Corte A–B en vivo">📏 Rumbo / Corte A–B</button>
+        <button type="button" id="btnMeasureDist" class="btn-small expert-only" title="Medir distancia, Rumbo Estructural (Azimut) y trazar Corte A–B en vivo">📏 Rumbo / Corte A–B</button>
       </div>
 
       <!-- Barra de Acceso Rápido a Capas Visuales Clave -->
       <div class="quick-layer-bar" id="quickLayerBar" aria-label="Cambio rápido de capa visual">
-        <button type="button" class="ql-pill active" data-layer="gold_hotspots">🔥 Focos Au</button>
-        <button type="button" class="ql-pill" data-layer="prospectivity_thermal">🌈 Térmico</button>
-        <button type="button" class="ql-pill" data-layer="alluvial_placer">🌊 Aluvial</button>
-        <button type="button" class="ql-pill" data-layer="ml_clusters">🧠 IA Alteración</button>
-        <button type="button" class="ql-pill" data-layer="rgb_mineralogico">💎 Ternario SWIR</button>
-        <button type="button" class="ql-pill" data-layer="lineaments">📐 Lineamientos</button>
+        <button type="button" class="ql-pill active" data-layer="gold_hotspots">🔥 Escala de Colores de Oro</button>
+        <button type="button" class="ql-pill" data-layer="prospectivity_thermal">🌈 Mapa de Calor Continuo</button>
+        <button type="button" class="ql-pill" data-layer="alluvial_placer">🌊 Oro en Ríos / Aluvial</button>
+        <button type="button" class="ql-pill expert-only" data-layer="ml_clusters">🧠 IA Alteración</button>
+        <button type="button" class="ql-pill expert-only" data-layer="rgb_mineralogico">💎 Ternario SWIR</button>
+        <button type="button" class="ql-pill expert-only" data-layer="lineaments">📐 Lineamientos</button>
+        <button type="button" class="ql-pill" data-layer="none">🛰️ Solo Satélite</button>
       </div>
 
       <div id="map" role="application" aria-label="Visor satelital interactivo de prospección aurífera"></div>
@@ -551,42 +556,53 @@
       <!-- Leyenda Dinámica de Interpretación Aurífera (Inferior Izquierda) -->
       <div class="map-legend" id="mapLegendCard">
         <div class="legend-head">
-          <strong id="legendTitle">🔥 Focos y Vetas de Oro</strong>
+          <strong id="legendTitle">🔥 Escala de Depósitos de Oro</strong>
           <button type="button" id="btnToggleLegend" class="btn-xs-ghost" title="Minimizar leyenda">–</button>
         </div>
         <div id="legendBody">
           <div class="legend-gradient" id="legendGradientBar"></div>
           <div class="legend-ticks" id="legendTicks">
-            <span>Fondo Limpio</span>
-            <span>Halo 50%</span>
-            <span>Veta 68%</span>
-            <span>Núcleo &gt;80%</span>
+            <span>Sin Evid.</span>
+            <span>Baja 36%</span>
+            <span>Media 55%</span>
+            <span>Alta 68%</span>
+            <span>Muy Alta &gt;80%</span>
+          </div>
+          <div class="legend-scale-list" id="simpleColorScaleLegend">
+            <div><span class="swatch-dot" style="background:#ef4444;border:1.5px solid #fde047;"></span> <strong>80–100% Muy Alta:</strong> Núcleo de depósito de oro 🎯</div>
+            <div><span class="swatch-dot" style="background:#f97316;"></span> <strong>68–80% Alta:</strong> Depósito o veta probable</div>
+            <div><span class="swatch-dot" style="background:#eab308;"></span> <strong>55–68% Media:</strong> Zona con indicios minerales</div>
+            <div><span class="swatch-dot" style="background:#10b981;"></span> <strong>36–55% Baja:</strong> Indicio débil / transición</div>
+            <div><span class="swatch-dot" style="background:#475569;border:1px dashed #94a3b8;"></span> <strong>0–36% Sin Evidencia:</strong> Terreno estéril o bosque (limpio)</div>
           </div>
           <div class="legend-symbols">
-            <span><i class="sym-dot sym-p1"></i> 🎯 Foco P1</span>
+            <span><i class="sym-dot sym-p1"></i> 🎯 Punto de Oro</span>
             <span><i class="sym-dot sym-mine"></i> 🪙 Mina Ref.</span>
-            <span><i class="sym-line sym-fault"></i> Falla SGC</span>
-            <span><i class="sym-box sym-anm"></i> Título ANM</span>
+            <span class="expert-only"><i class="sym-line sym-fault"></i> Falla SGC</span>
+            <span class="expert-only"><i class="sym-box sym-anm"></i> Título ANM</span>
           </div>
         </div>
       </div>
 
-      <!-- HUD Inferior Derecho: Diagnóstico Instantáneo bajo el Cursor + Firma Espectral -->
+      <!-- HUD Inferior Derecho: Diagnóstico Instantáneo bajo el Cursor -->
       <div class="spectral-hud" id="spectralHud">
         <div class="hud-head">
           <div>
-            <strong>Inspector Espectral en Vivo</strong>
-            <span id="hudVerdictBadge" class="verdict-pill neutral">Pase el cursor sobre el área</span>
+            <strong>¿Qué hay bajo el cursor?</strong>
+            <span id="hudVerdictBadge" class="verdict-pill neutral">Mueva el cursor sobre el mapa</span>
           </div>
           <button type="button" id="btnToggleHud" class="btn-xs-ghost" title="Minimizar inspector">–</button>
         </div>
         <div id="hudBody">
+          <div id="simpleCursorCard" class="simple-cursor-card">
+            Pase el cursor dentro del recuadro amarillo para medir la presencia de oro en ese punto exacto.
+          </div>
           <div class="hud-subrow">
             <span id="hudCoords" class="mono">7.0792, -74.6988</span>
             <span id="hudElev" class="mono">Elev: -- msnm</span>
           </div>
-          <canvas id="specCurveCanvas" width="320" height="92"></canvas>
-          <div id="hudReadout" class="hud-metrics">
+          <canvas id="specCurveCanvas" class="expert-only" width="320" height="92"></canvas>
+          <div id="hudReadout" class="hud-metrics expert-only">
             <span>Oro: <b>--</b></span>
             <span>Arcilla: <b>--</b></span>
             <span>FeOx: <b>--</b></span>
@@ -599,38 +615,103 @@
       <div id="loadingOverlay" class="loading-overlay hidden">
         <div class="loader-card">
           <div class="spinner"></div>
-          <div class="loading-title">Analizando Potencial Aurífero en GeoAuV2...</div>
-          <div class="loading-sub" id="loadingStepText">Descargando mosaico satelital libre de nubes y consultando SGC/ANM</div>
+          <div class="loading-title">Estudiando Depósitos de Oro en GeoAuV2...</div>
+          <div class="loading-sub" id="loadingStepText">Leyendo satélite libre de nubes y elevación oficial del terreno</div>
           <div class="progress-track"><div id="loadingProgressBar" class="progress-fill" style="width: 18%;"></div></div>
         </div>
       </div>
     </section>
 
-    <!-- Drawer Derecho: Resumen Ejecutivo Aurífero, Radar 4 Pilares y Corte Topográfico-Aurífero A–B -->
+    <!-- Drawer Derecho: Panel Principal Simple (4 Pasos Claros) + Gráficos Técnicos Opcionales -->
     <aside class="exec-drawer" id="execDrawer">
       <div class="drawer-header">
         <div>
-          <h2>Síntesis de Hallazgos Auríferos</h2>
+          <h2>Estudio de Depósitos de Oro</h2>
           <small id="execZoneSubtitle" class="muted-note">Cuadrante activo</small>
         </div>
-        <button id="btnCloseExecDrawer" class="btn-icon" title="Ocultar panel de resumen">✕</button>
+        <button id="btnCloseExecDrawer" class="btn-icon expert-only" title="Ocultar panel de resumen">✕</button>
       </div>
 
-      <!-- Tarjeta Hero MPI -->
-      <div class="hero-score-card" id="heroScoreCard">
-        <div class="hero-ring-wrap">
-          <div class="hero-score-num" id="heroMpiVal">--</div>
-          <div class="hero-score-unit">MPI / 100</div>
+      <!-- BLOQUE 1 (MODO SIMPLE): Elegir Zona a Estudiar -->
+      <div class="card-block simple-zone-card simple-only" id="simpleZoneSelectorCard">
+        <div class="row-between">
+          <h3>📍 1. Elegir Zona a Estudiar</h3>
+          <span class="pill">1 Clic</span>
         </div>
-        <div class="hero-meta">
-          <span class="hero-q-badge" id="heroClassBadge">Analizando...</span>
-          <div class="hero-class-text" id="heroClassLabel">Ejecute el análisis sobre cualquier zona</div>
-          <div class="hero-tags" id="heroQuickTags"></div>
+        <p class="muted-note" style="margin:0 0 6px;">Haga clic en cualquier punto del mapa, busque arriba o seleccione una zona:</p>
+        <div class="quick-chips" id="simpleZoneChips">
+          <button type="button" class="chip-btn" data-preset="segovia">⛏️ Segovia</button>
+          <button type="button" class="chip-btn" data-preset="buritica">⛰️ Buriticá</button>
+          <button type="button" class="chip-btn" data-preset="san_lucas">💎 San Lucas</button>
+          <button type="button" class="chip-btn" data-preset="bajo_cauca">🌊 Río Nechí</button>
+          <button type="button" class="chip-btn" data-preset="choco_quito">🛶 Chocó</button>
+          <button type="button" class="chip-btn" data-preset="marmato">🔥 Marmato</button>
+          <button type="button" class="chip-btn" data-preset="bogota_control">🧪 Zona Sin Oro</button>
+        </div>
+        <div class="form-grid-2" style="margin-top:4px;">
+          <label>Tamaño de Zona
+            <select id="selSimpleRoiKm">
+              <option value="2">2 × 2 km (Detalle)</option>
+              <option value="4" selected>4 × 4 km (Estándar)</option>
+              <option value="8">8 × 8 km (Regional)</option>
+            </select>
+          </label>
+          <label>Tipo de Oro a Buscar
+            <select id="selSimpleGoldType">
+              <option value="orogenico_vetas">⛏️ Oro en Montaña / Vetas</option>
+              <option value="aluvial_placer">🌊 Oro en Ríos / Aluvial</option>
+              <option value="epitermal_bs">🌋 Oro Epitermal (Baja Sulfuración)</option>
+              <option value="epitermal_as">🔥 Oro Epitermal (Alta Sulfuración)</option>
+              <option value="porfido_au_cu">⛰️ Pórfido Aurífero Au-Cu</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" id="btnSimpleRun" class="btn-primary simple-run-btn">
+          <span>🔍 Analizar Depósitos de Oro Aquí</span>
+        </button>
+      </div>
+
+      <!-- BLOQUE 2: Veredicto Directo ¿Hay Depósitos de Oro? -->
+      <div class="card-block verdict-master-card" id="verdictMasterCard">
+        <h3 class="simple-block-title">🏆 2. ¿Hay Depósitos de Oro?</h3>
+        <div id="simpleVerdictBox" class="simple-verdict-box">
+          <div id="verdictHeadline" class="verdict-banner">Analizando evidencia satelital de oro...</div>
+          <div class="verdict-meter-wrap">
+            <div class="verdict-meter-head">
+              <span>Nivel Global de Evidencia de Oro</span>
+              <strong id="verdictScorePct">--%</strong>
+            </div>
+            <div class="verdict-meter-track">
+              <div id="verdictMeterFill" class="verdict-meter-fill" style="width: 0%;"></div>
+            </div>
+          </div>
+          <p id="verdictPlainText" class="verdict-plain-text">Evaluando reflectancia del suelo y roca expuesta en el área indicada...</p>
+        </div>
+
+        <div class="hero-score-card" id="heroScoreCard">
+          <div class="hero-ring-wrap">
+            <div class="hero-score-num" id="heroMpiVal">--</div>
+            <div class="hero-score-unit">ÍNDICE / 100</div>
+          </div>
+          <div class="hero-meta">
+            <span class="hero-q-badge expert-only" id="heroClassBadge">Analizando...</span>
+            <div class="hero-class-text expert-only" id="heroClassLabel">Ejecute el análisis sobre cualquier zona</div>
+            <div class="hero-tags" id="heroQuickTags"></div>
+          </div>
         </div>
       </div>
 
-      <!-- Apartado Informativo en Vivo: ¿Qué se está usando en este cuadrante? -->
-      <div class="card-block evidence-live-card" id="execEvidenceCard">
+      <!-- BLOQUE 3: Escala de Colores Cuantitativa ¿En Qué Medida Hay Oro? -->
+      <div class="card-block color-scale-card" id="colorScaleBreakdownCard">
+        <div class="row-between">
+          <h3>🎨 3. ¿En Qué Medida Hay Oro? (Escala de Colores)</h3>
+        </div>
+        <p class="muted-note" style="margin:0 0 8px;">Área detectada según la escala de colores del mapa sobre la zona estudiada:</p>
+        <div id="colorScaleRowsWrap" class="color-scale-rows"></div>
+      </div>
+
+      <!-- Apartado Informativo Técnico: ¿Qué se está usando en este cuadrante? (Oculto en Simple) -->
+      <div class="card-block evidence-live-card expert-only" id="execEvidenceCard">
         <div class="row-between">
           <h3>🔬 ¿Qué se está usando aquí?</h3>
           <button type="button" id="btnOpenMethodFromDrawer" class="btn-xs">Ver detalle ↗</button>
@@ -640,8 +721,8 @@
         <div id="execActiveSourcesMini" class="sources-mini-list"></div>
       </div>
 
-      <!-- Gráfico Radar Retina de los 4 Pilares -->
-      <div class="card-block">
+      <!-- Gráfico Radar Retina de los 4 Pilares (Solo Modo Técnico) -->
+      <div class="card-block expert-only">
         <div class="row-between">
           <h3>Balance de los 4 Pilares Auríferos</h3>
           <span id="opticalSourceBadge" class="pill">Sin Nubes HD</span>
@@ -649,8 +730,8 @@
         <canvas id="radarChartCanvas" width="320" height="205" aria-label="Radar de 4 pilares geocientíficos"></canvas>
       </div>
 
-      <!-- Perfil Geológico-Aurífero Transversal (Corte A–B) -->
-      <div class="card-block">
+      <!-- Perfil Geológico-Aurífero Transversal (Corte A–B, Solo Modo Técnico) -->
+      <div class="card-block expert-only">
         <div class="row-between">
           <h3>📈 Corte Topográfico–Aurífero A–B</h3>
           <span id="profileSourceLbl" class="mono" style="font-size:10px;color:var(--accent);">Auto: Foco #1</span>
@@ -659,10 +740,10 @@
         <canvas id="profileCanvas" width="320" height="145" aria-label="Perfil transversal topográfico y aurífero"></canvas>
       </div>
 
-      <!-- Lista Directa de Focos de Oro para Campo -->
+      <!-- BLOQUE 4: Puntos Exactos de Oro en el Mapa -->
       <div class="card-block">
         <div class="row-between">
-          <h3>🎯 Focos de Oro Detectados</h3>
+          <h3>🎯 4. Puntos Exactos de Oro en el Mapa</h3>
           <div class="btn-row" style="margin:0;">
             <button type="button" id="btnQuickGpx" class="btn-xs" title="Descargar puntos GPX para GPS de campo">📍 .GPX</button>
             <button type="button" id="btnQuickKml" class="btn-xs" title="Descargar KML para Google Earth">🌍 .KML</button>
@@ -670,6 +751,12 @@
           </div>
         </div>
         <div id="execHotspotsList" class="targets-list"></div>
+      </div>
+
+      <!-- Pie discreto en Modo Simple para acceder a fuentes o vista avanzada -->
+      <div class="simple-footer-links simple-only" id="simpleModeFooterCard">
+        <button type="button" id="btnFooterOpenMethod" class="btn-small">🔬 Ver satélites usados</button>
+        <button type="button" id="btnFooterOpenTechnical" class="btn-small">🔧 Activar Modo Técnico (9 módulos)</button>
       </div>
     </aside>
   </main>
@@ -680,17 +767,17 @@
       <span class="mnav-ico">🗺️</span>
       <span>Mapa</span>
     </button>
-    <button type="button" class="mnav-btn" data-mview="left">
+    <button type="button" class="mnav-btn expert-only" data-mview="left">
       <span class="mnav-ico">⚙️</span>
       <span>Módulos</span>
     </button>
     <button type="button" class="mnav-btn" data-mview="right">
       <span class="mnav-ico">📊</span>
-      <span>Resumen Au</span>
+      <span>¿Hay Oro?</span>
     </button>
     <button type="button" class="mnav-btn" data-mview="method">
       <span class="mnav-ico">🔬</span>
-      <span>Qué se usa</span>
+      <span>Fuentes</span>
     </button>
   </nav>
 
@@ -716,29 +803,29 @@
     </div>
   </div>
 
-  <!-- Modal de Guía Interactiva de Interpretación -->
+  <!-- Modal de Guía Rápida de Escala de Colores y Uso -->
   <div id="guideModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="row-between">
-        <h2>📖 Cómo Identificar Depósitos de Oro en GeoAuV2</h2>
+        <h2>📖 Cómo Saber si Hay Oro y Leer la Escala de Colores</h2>
         <button id="btnCloseGuide" class="btn-icon">✕</button>
       </div>
       <div class="modal-scroll guide-grid">
         <div class="card-block">
-          <h3>1. Focos y Vetas sobre Mapa Limpio (`🔥`)</h3>
-          <p class="muted-note">GeoAuV2 deja <strong>100% transparente el terreno estéril</strong> para que usted vea con nitidez ríos, crestas, carreteras y labores mineras sobre imagen satelital sin nubes (zoom 20). Las zonas mineralizadas brillan desde verde esmeralda (halo) hasta <strong>rojo/oro intenso con isolíneas blancas (&gt;80%)</strong> en el núcleo aurífero.</p>
+          <h3>1. Estudie Cualquier Zona en 3 Segundos</h3>
+          <p class="muted-note">Busque un municipio o río en la barra superior, pegue coordenadas GPS, haga clic directamente en el mapa o elija un distrito rápido y presione <strong>🔍 Estudiar Zona</strong>.</p>
         </div>
         <div class="card-block">
-          <h3>2. Pines `🎯 Au #1` vs. Minas Oficiales `🪙`</h3>
-          <p class="muted-note">Los pines pulsantes <strong>🎯 #1, #2...</strong> señalan la coordenada exacta del pico máximo de anomalía detectado por IA, indicando al instante si cae en <strong>🟢 Área Libre (Solicitable ANM)</strong> o en título vigente. Los iconos <strong>🪙</strong> representan minas o yacimientos históricos de referencia (SGC).</p>
+          <h3>2. Lea el Veredicto Directo (`¿Hay Oro?`)</h3>
+          <p class="muted-note">El panel derecho le dice de inmediato si el área muestra <strong>✅ Evidencia Alta/Muy Alta</strong>, <strong>⚠️ Evidencia Moderada</strong> o <strong>❌ Sin Evidencia de Oro</strong>, junto con el puntaje de <code>0% a 100%</code>.</p>
         </div>
         <div class="card-block">
-          <h3>3. Oro de Veta vs. Oro Aluvial (`🌊`)</h3>
-          <p class="muted-note">En cordillera (Segovia, Buriticá, San Lucas, Marmato) busque anomalías alineadas con <strong>Fallas SGC</strong> y crestas en el <strong>Corte A–B</strong>. En llanuras fluviales (Bajo Cauca, Río Nechí, Condoto, Río Quito) active la capa <strong>🌊 Placeres Aluviales y Pozas</strong> para identificar bancos de grava y terrazas cuaternarias `Q-al`.</p>
+          <h3>3. Escala de 5 Colores sobre el Mapa</h3>
+          <p class="muted-note"><strong>🔴 Rojo/Dorado (80–100%):</strong> Núcleo prioritario de depósito.<br><strong>🟠 Naranja (68–80%):</strong> Veta o depósito probable.<br><strong>🟡 Amarillo (55–68%):</strong> Zona con indicios minerales.<br><strong>🟢 Verde (36–55%):</strong> Indicio débil.<br><strong>⬜ Transparente (0–36%):</strong> Terreno sin evidencia o bosque denso.</p>
         </div>
         <div class="card-block">
-          <h3>4. Exportación Directa a Campo (`.GPX` y `.KML`)</h3>
-          <p class="muted-note">Descargue los focos detectados en formato <strong>.GPX</strong> (Garmin, OsmAnd, Avenza, Gaia GPS) o <strong>.KML</strong> (Google Earth 3D), o haga clic en <strong>🧭 Google Maps</strong> dentro de cualquier foco para navegar en terreno.</p>
+          <h3>4. Revise el Terreno Real y Exporte a Campo</h3>
+          <p class="muted-note">Mantenga presionado <strong>👁️ Ver Terreno Real</strong> (o la barra espaciadora) para mirar debajo de los colores, o toque un pin <strong>🎯 #1, #2</strong> para abrirlo en Google Maps o descargarlo en <strong>.GPX / .KML / PDF</strong>.</p>
         </div>
       </div>
     </div>
