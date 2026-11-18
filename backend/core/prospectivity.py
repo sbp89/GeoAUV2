@@ -7,7 +7,7 @@ Favorabilidad Mineral Ponderada, Prospectividad Aurífera Integrada y Plan Explo
   nubes SCL e infraestructura urbana sin inventar polígonos estructurales bajo dosel).
 - Rechazo automático de cuerpos marinos abiertos (0% potencial aurífero).
 """
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 import numpy as np
 
 from backend.config import DEPOSIT_MODELS
