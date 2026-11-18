@@ -187,3 +187,86 @@ class SupabaseService:
                 )
         except Exception:
             pass
+
+    @classmethod
+    def list_db_users(cls) -> List[Dict[str, Any]]:
+        if not cls.is_configured():
+            return []
+        try:
+            url = (
+                f"{SUPABASE_URL.rstrip('/')}/rest/v1/geoauv2_users"
+                f"?select=id,username,username_lower,password_hash,full_name,role,created_by,created_at"
+                f"&order=created_at.asc"
+            )
+            with httpx.Client(timeout=4.5) as client:
+                r = client.get(url, headers=cls._headers())
+                if r.status_code == 200:
+                    return r.json()
+                # Respaldo automático en tabla geoauv2_projects si la caché PostgREST aún no expone geoauv2_users
+                fb_url = (
+                    f"{SUPABASE_URL.rstrip('/')}/rest/v1/geoauv2_projects"
+                    f"?district_code=eq.__geoauv2_user__&select=config_json,created_at"
+                )
+                rf = client.get(fb_url, headers=cls._headers())
+                if rf.status_code == 200:
+                    out: List[Dict[str, Any]] = []
+                    for row in rf.json():
+                        cfg = row.get("config_json") or {}
+                        if cfg.get("username"):
+                            out.append({**cfg, "created_at": cfg.get("created_at") or row.get("created_at")})
+                    return out
+        except Exception:
+            pass
+        return []
+
+    @classmethod
+    def upsert_db_user(cls, user_row: Dict[str, Any]) -> Dict[str, Any]:
+        if not cls.is_configured():
+            return {"saved": False, "reason": "unconfigured"}
+        try:
+            url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/geoauv2_users?on_conflict=username_lower"
+            headers = cls._headers("resolution=merge-duplicates,return=representation")
+            payload = {
+                "username": user_row["username"],
+                "username_lower": user_row["username_lower"],
+                "password_hash": user_row["password_hash"],
+                "full_name": user_row.get("full_name", ""),
+                "role": user_row.get("role", "admin"),
+                "created_by": user_row.get("created_by", "Momentum"),
+            }
+            with httpx.Client(timeout=5.0) as client:
+                r = client.post(url, headers=headers, json=payload)
+                if r.status_code in (200, 201):
+                    return {"saved": True, "storage": "geoauv2_users"}
+                # Respaldo automático en geoauv2_projects si la caché de esquema está refrescando
+                fb_url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/geoauv2_projects?on_conflict=slug"
+                fb_payload = {
+                    "slug": f"user_{user_row['username_lower']}",
+                    "name": f"Usuario {user_row['username']}",
+                    "district_code": "__geoauv2_user__",
+                    "center_lat": 0.0,
+                    "center_lon": 0.0,
+                    "roi_size_km": 1.0,
+                    "bbox": [],
+                    "config_json": payload,
+                }
+                rf = client.post(fb_url, headers=headers, json=fb_payload)
+                if rf.status_code in (200, 201):
+                    return {"saved": True, "storage": "geoauv2_projects_fallback"}
+                return {"saved": False, "status_code": r.status_code, "detail": r.text[:200]}
+        except Exception as exc:
+            return {"saved": False, "reason": str(exc)}
+
+    @classmethod
+    def delete_db_user(cls, username_lower: str) -> Dict[str, Any]:
+        if not cls.is_configured() or username_lower == "momentum":
+            return {"deleted": False}
+        try:
+            with httpx.Client(timeout=4.5) as client:
+                url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/geoauv2_users?username_lower=eq.{username_lower}"
+                r = client.delete(url, headers=cls._headers("return=minimal"))
+                fb_url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/geoauv2_projects?slug=eq.user_{username_lower}"
+                client.delete(fb_url, headers=cls._headers("return=minimal"))
+                return {"deleted": r.status_code in (200, 204)}
+        except Exception as exc:
+            return {"deleted": False, "reason": str(exc)}

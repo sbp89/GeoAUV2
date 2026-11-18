@@ -70,6 +70,12 @@
       </button>
 
       <button id="btnOpenGuide" class="btn-icon" title="Guía visual: cómo leer la escala de colores de oro">?</button>
+      <button id="btnOpenUsersModal" class="btn-ghost" title="Administrar y crear nuevos usuarios de acceso">
+        <span class="hide-xs">👥 Usuarios (<span id="activeUserLabel">Momentum</span>)</span><span class="show-xs-inline">👥</span>
+      </button>
+      <button id="btnLogout" class="btn-ghost" title="Cerrar sesión y bloquear acceso">
+        <span class="hide-xs">🚪 Salir</span><span class="show-xs-inline">🚪</span>
+      </button>
       <button id="btnLang" class="btn-icon hide-xs expert-only" title="Cambiar idioma ES / EN">ES</button>
       <button id="btnTheme" class="btn-icon" title="Cambiar tema Oscuro / Claro">☀</button>
     </div>
@@ -537,7 +543,8 @@
 
         <button type="button" id="btnPeekBase" class="btn-small btn-peek" title="Mantenga presionado (o barra espaciadora) para ver el terreno real sin colores encima">👁️ Ver Terreno Real</button>
         <button type="button" id="btnToggleLabels" class="btn-small btn-primary-outline" title="Mostrar u ocultar nombres de municipios, veredas, ríos y distritos">🏷️ Nombres: ON</button>
-        <button type="button" id="btnMeasureDist" class="btn-small expert-only" title="Medir distancia, Rumbo Estructural (Azimut) y trazar Corte A–B en vivo">📏 Rumbo / Corte A–B</button>
+        <button type="button" id="btnMeasureDist" class="btn-small" title="Medir distancia exacta entre dos puntos en el mapa (metros y kilómetros)">📏 Medir Distancia</button>
+        <button type="button" id="btnClearMeasure" class="btn-small hidden" title="Limpiar medición de distancia del mapa">✕ Borrar Medida</button>
       </div>
 
       <!-- Barra de Acceso Rápido a Capas Visuales Clave -->
@@ -549,6 +556,21 @@
         <button type="button" class="ql-pill expert-only" data-layer="rgb_mineralogico">💎 Ternario SWIR</button>
         <button type="button" class="ql-pill expert-only" data-layer="lineaments">📐 Lineamientos</button>
         <button type="button" class="ql-pill" data-layer="none">🛰️ Solo Satélite</button>
+      </div>
+
+      <!-- Tarjeta Flotante de Medición de Distancias Punto a Punto -->
+      <div id="measureReadoutCard" class="measure-readout-card hidden" role="status" aria-live="polite">
+        <div class="measure-card-head">
+          <strong id="measureCardTitle">📏 Medición Punto a Punto</strong>
+          <button type="button" id="btnCardCloseMeasure" class="btn-xs-ghost" title="Cerrar y borrar medición">✕</button>
+        </div>
+        <div id="measureCardBody" class="measure-card-body">
+          Haga clic en el <strong>Punto A</strong> y luego en el <strong>Punto B</strong> sobre el mapa.
+        </div>
+        <div id="measureCardActions" class="measure-card-actions hidden">
+          <button type="button" id="btnMeasureAnother" class="btn-xs">📏 Medir Otro Tramo</button>
+          <button type="button" id="btnMeasureCardClear" class="btn-xs">✕ Borrar</button>
+        </div>
       </div>
 
       <div id="map" role="application" aria-label="Visor satelital interactivo de prospección aurífera"></div>
@@ -840,6 +862,101 @@
       </div>
       <p class="muted-note">Corridas recientes de prospección aurífera y proyectos guardados con seguridad RLS.</p>
       <div id="cloudRunsTableWrap" class="modal-scroll"></div>
+    </div>
+  </div>
+
+  <!-- Modal de Gestión y Creación de Usuarios -->
+  <div id="usersModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="usersModalTitle">
+    <div class="modal-card modal-wide">
+      <div class="row-between">
+        <div>
+          <h2 id="usersModalTitle" style="margin:0;">👥 Control de Acceso y Usuarios — GeoAuV2</h2>
+          <small class="muted-note">Cree nuevas cuentas autorizadas para ingresar a la plataforma o administre las existentes.</small>
+        </div>
+        <button type="button" id="btnCloseUsersModal" class="btn-icon" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="modal-scroll users-modal-grid">
+        <div class="card-block">
+          <h3>➕ Crear Nuevo Usuario</h3>
+          <form id="createUserForm" class="users-create-form">
+            <label>Nombre de Usuario (mín. 3 caracteres)
+              <input type="text" id="inpNewUsername" placeholder="Ej. GeologoNorte" minlength="3" maxlength="60" required autocomplete="off" />
+            </label>
+            <label>Nombre Completo / Área
+              <input type="text" id="inpNewFullName" placeholder="Ej. Carlos Pérez · Exploración" maxlength="120" autocomplete="off" />
+            </label>
+            <div class="form-grid-2">
+              <label>Clave de Ingreso (mín. 4 caracteres)
+                <input type="password" id="inpNewPassword" placeholder="Clave segura" minlength="4" maxlength="128" required autocomplete="new-password" />
+              </label>
+              <label>Perfil / Rol
+                <select id="selNewUserRole">
+                  <option value="admin">Administrador (Acceso Total)</option>
+                  <option value="geologo">Geólogo / Exploración</option>
+                  <option value="operador">Operador de Campo</option>
+                  <option value="lector">Consulta / Lectura</option>
+                </select>
+              </label>
+            </div>
+            <button type="submit" id="btnCreateUser" class="btn-primary simple-run-btn">
+              <span>✅ Crear Usuario Autorizado</span>
+            </button>
+            <div id="userCreateMsg" class="user-create-msg hidden"></div>
+          </form>
+        </div>
+
+        <div class="card-block">
+          <div class="row-between" style="margin-bottom:8px;">
+            <h3 style="margin:0;">🔑 Usuarios Habilitados</h3>
+            <span id="usersCountBadge" class="pill">--</span>
+          </div>
+          <div id="usersTableWrap" class="table-scroll">
+            <p class="muted-note">Cargando lista de usuarios...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pantalla de Login Seguro (Bloqueo de Ingresos No Autorizados) -->
+  <div id="authLoginOverlay" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-icon auth-logo-icon" aria-hidden="true">Au</div>
+        <div>
+          <h1 id="loginModalTitle">GeoAuV2 · Acceso Restringido</h1>
+          <p>Plataforma Satelital de Prospección Aurífera</p>
+        </div>
+      </div>
+
+      <form id="loginForm" class="auth-form">
+        <label>Usuario
+          <input type="text" id="inpLoginUser" placeholder="Ingrese su usuario" autocomplete="username" required />
+        </label>
+
+        <label>Clave de Acceso
+          <div class="auth-input-wrap">
+            <input type="password" id="inpLoginPass" placeholder="Ingrese su clave" autocomplete="current-password" required />
+            <button type="button" id="btnTogglePassVis" class="btn-xs-ghost auth-eye-btn" title="Mostrar / ocultar clave" aria-label="Mostrar clave">👁️</button>
+          </div>
+        </label>
+
+        <label class="auth-remember">
+          <input type="checkbox" id="chkRememberSession" checked />
+          <span>Mantener sesión iniciada en este navegador</span>
+        </label>
+
+        <div id="loginErrorBox" class="auth-error hidden"></div>
+
+        <button type="submit" id="btnSubmitLogin" class="btn-primary auth-submit-btn">
+          <span>🔐 Ingresar a GeoAuV2</span>
+        </button>
+      </form>
+
+      <div class="auth-footer-note">
+        Acceso protegido contra ingresos indeseados. Gestione usuarios adicionales una vez dentro desde <strong>👥 Usuarios</strong>.
+      </div>
     </div>
   </div>
 

@@ -126,3 +126,15 @@ class ProjectSaveRequest(BaseModel):
     roi_size_km: float = 4.0
     bbox: List[float]
     config_json: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=60)
+    password: str = Field(min_length=4, max_length=128)
+    full_name: Optional[str] = Field(default="", max_length=120)
+    role: str = Field(default="admin")

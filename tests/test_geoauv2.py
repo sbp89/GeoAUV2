@@ -300,6 +300,63 @@ class TestGeoAuV2CoreAndAPI(unittest.TestCase):
         self.assertIn("colorScaleRowsWrap", r_root.text)
         self.assertIn("methodologyModal", r_root.text)
         self.assertIn("mobileBottomNav", r_root.text)
+        self.assertIn("authLoginOverlay", r_root.text)
+        self.assertIn("usersModal", r_root.text)
+        self.assertIn("btnMeasureDist", r_root.text)
+        self.assertIn("measureReadoutCard", r_root.text)
+
+    def test_auth_login_and_user_creation_lifecycle(self) -> None:
+        # 1. Sin token debe rechazar acceso a /api/auth/me y /api/auth/users
+        self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
+        self.assertEqual(self.client.get("/api/auth/users").status_code, 401)
+
+        # 2. Clave errónea debe responder 401
+        r_bad = self.client.post("/api/auth/login", json={"username": "Momentum", "password": "Momentum1"})
+        self.assertEqual(r_bad.status_code, 401)
+
+        # 3. Credenciales correctas Momentum / Momentum1.
+        r_ok = self.client.post("/api/auth/login", json={"username": "Momentum", "password": "Momentum1."})
+        self.assertEqual(r_ok.status_code, 200)
+        login_data = r_ok.json()
+        self.assertTrue(login_data["authenticated"])
+        self.assertEqual(login_data["user"]["username"], "Momentum")
+        token = login_data["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 4. Verificar sesión /api/auth/me y listado /api/auth/users
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 200)
+        r_list = self.client.get("/api/auth/users", headers=headers)
+        self.assertEqual(r_list.status_code, 200)
+        self.assertTrue(any(u["username"] == "Momentum" for u in r_list.json()["users"]))
+
+        # 5. Crear un nuevo usuario y comprobar que puede iniciar sesión
+        new_uname = "ExploraTestUser"
+        self.client.delete(f"/api/auth/users/{new_uname}", headers=headers)
+        r_create = self.client.post(
+            "/api/auth/users",
+            headers=headers,
+            json={
+                "username": new_uname,
+                "password": "ClaveGeo2026.",
+                "full_name": "Geólogo de Prueba",
+                "role": "geologo",
+            },
+        )
+        self.assertEqual(r_create.status_code, 200)
+        self.assertTrue(r_create.json()["created"])
+
+        r_login2 = self.client.post("/api/auth/login", json={"username": new_uname, "password": "ClaveGeo2026."})
+        self.assertEqual(r_login2.status_code, 200)
+        self.assertTrue(r_login2.json()["authenticated"])
+        self.assertEqual(r_login2.json()["user"]["username"], new_uname)
+
+        # 6. No se permite eliminar la cuenta principal Momentum
+        self.assertEqual(self.client.delete("/api/auth/users/Momentum", headers=headers).status_code, 400)
+
+        # 7. Limpiar usuario de prueba creado
+        r_del = self.client.delete(f"/api/auth/users/{new_uname}", headers=headers)
+        self.assertEqual(r_del.status_code, 200)
+        self.assertTrue(r_del.json()["deleted"])
 
     def test_prefeasibility_rigor_nan_urban_alluvial_isolation_and_audit(self) -> None:
         # 1. Máscara urbana: mitad roca alterada expuesta, mitad concreto/techo urbano brillante

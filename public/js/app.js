@@ -5,6 +5,9 @@
    directa a GPS (.GPX / .KML), magnetometría 3D y persistencia en la nube.
    ============================================================================ */
 
+const AUTH_TOKEN_KEY = "geoauv2_auth_token";
+const AUTH_USER_KEY = "geoauv2_auth_user";
+
 const state = {
   catalog: null,
   analysis: null,
@@ -25,6 +28,9 @@ const state = {
   activeMethodTab: "sources",
   mobileView: "map",
   simpleMode: true,
+  authToken: null,
+  currentUser: null,
+  appInitialized: false,
   loadingTimer: null,
   nominatimTimer: null,
 };
@@ -155,6 +161,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.body.classList.toggle("simple-mode", state.simpleMode);
   initMap();
   bindUIEvents();
+  bindAuthAndUserEvents();
   if (window.innerWidth <= 560) {
     const legBody = document.getElementById("legendBody");
     const legBtn = document.getElementById("btnToggleLegend");
@@ -163,12 +170,22 @@ document.addEventListener("DOMContentLoaded", async () => {
       legBtn.textContent = "+";
     }
   }
+  await checkAuthAndBoot();
+});
+
+async function startGeoAuWorkspace() {
+  if (state.appInitialized) {
+    map.invalidateSize();
+    return;
+  }
+  state.appInitialized = true;
   updateDmsTelemetry();
   await Promise.all([checkHealth(), loadCatalog()]);
   syncSimpleSelectorsFromTechnical();
   await runPipeline();
   await runMagnetometry(true);
-});
+  setTimeout(() => map.invalidateSize(), 120);
+}
 
 /* ============================================================================
    1. Inicialización de Mapas Satelitales Libres de Nubes HD y Etiquetas
@@ -547,16 +564,18 @@ function bindUIEvents() {
       return;
     }
     if (e.key === "Escape") {
-      ["methodologyModal", "guideModal", "cloudModal"].forEach((mid) => {
+      ["methodologyModal", "guideModal", "cloudModal", "usersModal"].forEach((mid) => {
         document.getElementById(mid)?.classList.add("hidden");
       });
+      if (state.measureMode) clearDistanceMeasurement();
       return;
     }
     const tag = (document.activeElement?.tagName || "").toUpperCase();
-    const anyModalOpen = ["methodologyModal", "guideModal", "cloudModal"].some(
+    const authLocked = !document.getElementById("authLoginOverlay")?.classList.contains("hidden");
+    const anyModalOpen = ["methodologyModal", "guideModal", "cloudModal", "usersModal"].some(
       (mid) => !document.getElementById(mid)?.classList.contains("hidden")
     );
-    if (e.code === "Space" && !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(tag) && !anyModalOpen) {
+    if (!authLocked && e.code === "Space" && !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(tag) && !anyModalOpen) {
       e.preventDefault();
       startPeekBase();
     }
@@ -605,25 +624,18 @@ function bindUIEvents() {
     showToast("Muestras supervisadas limpiadas.");
   });
 
-  // Regla Estructural de Rumbo / Azimut y Corte A–B
+  // Herramienta de Medición de Distancias Punto a Punto (Modo Simple y Técnico)
   document.getElementById("btnMeasureDist").addEventListener("click", () => {
-    state.measureMode = !state.measureMode;
-    state.sampleCaptureMode = false;
-    state.measurePts = [];
-    if (rubberBandLine) {
-      map.removeLayer(rubberBandLine);
-      rubberBandLine = null;
-    }
-    if (!state.measureMode) {
-      measureLayerGroup.clearLayers();
+    if (state.measureMode) {
+      clearDistanceMeasurement();
     } else {
-      measureLayerGroup.clearLayers();
-      showToast("Haga clic en Punto A y Punto B en el mapa para medir Rumbo Estructural y trazar el Corte A–B.");
+      startDistanceMeasureMode();
     }
-    const btn = document.getElementById("btnMeasureDist");
-    btn.classList.toggle("btn-primary-outline", state.measureMode);
-    btn.textContent = state.measureMode ? "📏 Marque A → B en Mapa" : "📏 Rumbo / Corte A–B";
   });
+  document.getElementById("btnClearMeasure")?.addEventListener("click", clearDistanceMeasurement);
+  document.getElementById("btnCardCloseMeasure")?.addEventListener("click", clearDistanceMeasurement);
+  document.getElementById("btnMeasureCardClear")?.addEventListener("click", clearDistanceMeasurement);
+  document.getElementById("btnMeasureAnother")?.addEventListener("click", () => startDistanceMeasureMode());
 
   // Magnetometría 3D interactiva (Ratón + Táctil Móvil)
   document.getElementById("btnRunMag").addEventListener("click", () => runMagnetometry(false));
@@ -743,7 +755,7 @@ function bindUIEvents() {
   });
 
   // Cerrar cualquier modal haciendo clic en el fondo oscuro exterior
-  ["methodologyModal", "guideModal", "cloudModal"].forEach((mid) => {
+  ["methodologyModal", "guideModal", "cloudModal", "usersModal"].forEach((mid) => {
     const el = document.getElementById(mid);
     el?.addEventListener("click", (ev) => {
       if (ev.target === el) el.classList.add("hidden");
@@ -2237,16 +2249,86 @@ function calculateHaversineKm(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
 }
 
+function formatDistanceMetric(distM) {
+  const mRound = Math.round(distM);
+  const km = distM / 1000.0;
+  if (km >= 1.0) {
+    return `${km.toFixed(2)} km (${mRound.toLocaleString("es-CO")} m)`;
+  }
+  return `${mRound.toLocaleString("es-CO")} m (${km.toFixed(3)} km)`;
+}
+
+function sampleElevationAt(lat, lng) {
+  const pi = state.analysis?.pixel_inspector;
+  const bbox = state.analysis?.metadata?.bbox;
+  if (!pi?.elevation_m || !bbox) return null;
+  const [minLon, minLat, maxLon, maxLat] = bbox;
+  if (lng < minLon || lng > maxLon || lat < minLat || lat > maxLat) return null;
+  const g = pi.grid_size;
+  const col = Math.min(g - 1, Math.max(0, Math.floor(((lng - minLon) / (maxLon - minLon)) * g)));
+  const row = Math.min(g - 1, Math.max(0, Math.floor(((maxLat - lat) / (maxLat - minLat)) * g)));
+  const v = pi.elevation_m?.[row]?.[col];
+  return typeof v === "number" && v >= 0 ? Math.round(v) : null;
+}
+
+function startDistanceMeasureMode() {
+  state.measureMode = true;
+  state.sampleCaptureMode = false;
+  state.measurePts = [];
+  if (rubberBandLine) {
+    map.removeLayer(rubberBandLine);
+    rubberBandLine = null;
+  }
+  measureLayerGroup.clearLayers();
+  document.getElementById("map")?.classList.add("measuring-cursor");
+
+  const btn = document.getElementById("btnMeasureDist");
+  if (btn) {
+    btn.classList.add("btn-primary-outline");
+    btn.textContent = "📏 Clic Punto A (Cancelar)";
+  }
+  document.getElementById("btnClearMeasure")?.classList.add("hidden");
+
+  const card = document.getElementById("measureReadoutCard");
+  const body = document.getElementById("measureCardBody");
+  const actions = document.getElementById("measureCardActions");
+  if (card && body && actions) {
+    body.innerHTML = `Haga clic en el <strong>Punto A (inicio)</strong> sobre el mapa.`;
+    actions.classList.add("hidden");
+    card.classList.remove("hidden");
+  }
+  showToast("Modo medición activo: haga clic en el Punto A y luego en el Punto B.");
+}
+
+function clearDistanceMeasurement() {
+  state.measureMode = false;
+  state.measurePts = [];
+  if (rubberBandLine) {
+    map.removeLayer(rubberBandLine);
+    rubberBandLine = null;
+  }
+  measureLayerGroup.clearLayers();
+  document.getElementById("map")?.classList.remove("measuring-cursor");
+
+  const btn = document.getElementById("btnMeasureDist");
+  if (btn) {
+    btn.classList.remove("btn-primary-outline");
+    btn.textContent = "📏 Medir Distancia";
+  }
+  document.getElementById("btnClearMeasure")?.classList.add("hidden");
+  document.getElementById("measureReadoutCard")?.classList.add("hidden");
+}
+
 function drawTransectLineOnMap(p1, p2, labelText) {
   measureLayerGroup.clearLayers();
-  L.circleMarker(p1, { radius: 5, color: "#fde047", fillColor: "#0b0f17", fillOpacity: 1 })
-    .bindTooltip("A", { permanent: true, direction: "left" })
+  L.circleMarker(p1, { radius: 6, color: "#00e5ff", weight: 2, fillColor: "#0b0f17", fillOpacity: 1 })
+    .bindTooltip("A", { permanent: true, direction: "left", className: "measure-tooltip-perm" })
     .addTo(measureLayerGroup);
-  L.circleMarker(p2, { radius: 5, color: "#fde047", fillColor: "#ef4444", fillOpacity: 1 })
-    .bindTooltip("B", { permanent: true, direction: "right" })
+  L.circleMarker(p2, { radius: 6, color: "#00e5ff", weight: 2, fillColor: "#ef4444", fillOpacity: 1 })
+    .bindTooltip("B", { permanent: true, direction: "right", className: "measure-tooltip-perm" })
     .addTo(measureLayerGroup);
-  L.polyline([p1, p2], { color: "#fde047", weight: 2.8, dashArray: "6,4" })
-    .bindTooltip(labelText, { permanent: true, direction: "top" })
+  L.polyline([p1, p2], { color: "#00e5ff", weight: 3.2, dashArray: "7,5" })
+    .bindTooltip(labelText, { permanent: true, direction: "center", className: "measure-tooltip-perm" })
     .addTo(measureLayerGroup);
 }
 
@@ -2257,10 +2339,17 @@ function onMapClick(e) {
     state.measurePts.push([lat, lng]);
     if (state.measurePts.length === 1) {
       measureLayerGroup.clearLayers();
-      L.circleMarker([lat, lng], { radius: 5, color: "#00e5ff", fillOpacity: 1 })
-        .bindTooltip("A", { permanent: true })
+      L.circleMarker([lat, lng], { radius: 6, color: "#00e5ff", weight: 2, fillColor: "#0b0f17", fillOpacity: 1 })
+        .bindTooltip("A", { permanent: true, direction: "left", className: "measure-tooltip-perm" })
         .addTo(measureLayerGroup);
-      showToast("Punto A fijado. Haga clic en el Punto B para calcular Rumbo y Corte A–B.");
+
+      const btn = document.getElementById("btnMeasureDist");
+      if (btn) btn.textContent = "📏 Clic Punto B (Cancelar)";
+      const body = document.getElementById("measureCardBody");
+      if (body) {
+        body.innerHTML = `<strong>Punto A fijado</strong> (${lat.toFixed(5)}, ${lng.toFixed(5)}).<br>Mueva el cursor y haga clic en el <strong>Punto B (destino)</strong>.`;
+      }
+      showToast("Punto A fijado. Ahora haga clic en el Punto B para medir la distancia.");
     } else if (state.measurePts.length >= 2) {
       const p1 = state.measurePts[state.measurePts.length - 2];
       const p2 = state.measurePts[state.measurePts.length - 1];
@@ -2269,21 +2358,44 @@ function onMapClick(e) {
         rubberBandLine = null;
       }
       const distM = map.distance(p1, p2);
-      const distStr = distM >= 1000 ? `${(distM / 1000).toFixed(2)} km` : `${Math.round(distM)} m`;
+      const distFull = formatDistanceMetric(distM);
+      const distMain = distM >= 1000 ? `${(distM / 1000).toFixed(2)} km` : `${Math.round(distM).toLocaleString("es-CO")} m`;
       const { azimuth, strike } = calculateBearingAndStrike(p1[0], p1[1], p2[0], p2[1]);
-      const fullLbl = `${distStr} · Rumbo ${strike} (Az ${azimuth}°)`;
 
-      drawTransectLineOnMap(p1, p2, fullLbl);
+      const e1 = sampleElevationAt(p1[0], p1[1]);
+      const e2 = sampleElevationAt(p2[0], p2[1]);
+      const elevStr = e1 !== null && e2 !== null
+        ? `<br><span>⛰️ Desnivel A → B: <strong>${e2 - e1 >= 0 ? "+" : ""}${e2 - e1} m</strong> (${e1} → ${e2} msnm)</span>`
+        : "";
+
+      drawTransectLineOnMap(p1, p2, `📏 ${distFull}`);
       state.customTransect = [p1, p2];
-      document.getElementById("profileSourceLbl").textContent = `${distStr} · ${strike}`;
+      document.getElementById("profileSourceLbl").textContent = `${distMain} · ${strike}`;
       drawCrossSectionProfile();
+
+      const body = document.getElementById("measureCardBody");
+      const actions = document.getElementById("measureCardActions");
+      if (body && actions) {
+        body.innerHTML = `
+          <div class="measure-big-dist">📏 ${distFull}</div>
+          <div style="margin-top:3px;color:var(--text-muted);font-size:11px;">
+            Rumbo: <strong>${strike}</strong> (Azimut ${azimuth}°)
+            ${elevStr}
+          </div>
+        `;
+        actions.classList.remove("hidden");
+      }
 
       state.measureMode = false;
       state.measurePts = [];
+      document.getElementById("map")?.classList.remove("measuring-cursor");
       const btn = document.getElementById("btnMeasureDist");
-      btn.classList.remove("btn-primary-outline");
-      btn.textContent = "📏 Rumbo / Corte A–B";
-      showToast(`Medición lista: ${fullLbl} (Corte A–B actualizado)`);
+      if (btn) {
+        btn.classList.remove("btn-primary-outline");
+        btn.textContent = "📏 Medir Distancia";
+      }
+      document.getElementById("btnClearMeasure")?.classList.remove("hidden");
+      showToast(`Distancia medida: ${distFull}`);
     }
     return;
   }
@@ -2316,19 +2428,28 @@ function onMapClick(e) {
   document.getElementById("inpLon").value = lng.toFixed(5);
   updateDmsTelemetry();
   if (centerCrosshair) centerCrosshair.setLatLng([lat, lng]);
-  showToast(`Centro fijado en (${lat.toFixed(4)}, ${lng.toFixed(4)}) — Presione 'Analizar Oro'`);
+  showToast(`Centro fijado en (${lat.toFixed(4)}, ${lng.toFixed(4)}) — Presione 'Estudiar Zona'`);
 }
 
 function onMapMouseMove(e) {
   const { lat, lng } = e.latlng;
 
-  // Línea elástica en vivo mientras mide Rumbo A -> B
+  // Línea elástica y distancia en vivo mientras mide Punto A -> Punto B
   if (state.measureMode && state.measurePts.length === 1) {
     const p1 = state.measurePts[0];
+    const liveDistM = map.distance(p1, [lat, lng]);
+    const liveTxt = formatDistanceMetric(liveDistM);
     if (!rubberBandLine) {
-      rubberBandLine = L.polyline([p1, [lat, lng]], { color: "#00e5ff", weight: 2, dashArray: "4,4" }).addTo(map);
+      rubberBandLine = L.polyline([p1, [lat, lng]], { color: "#00e5ff", weight: 2.5, dashArray: "5,5" })
+        .bindTooltip(`📏 ${liveTxt}`, { permanent: true, direction: "center", className: "measure-tooltip-perm" })
+        .addTo(map);
     } else {
       rubberBandLine.setLatLngs([p1, [lat, lng]]);
+      rubberBandLine.setTooltipContent(`📏 ${liveTxt}`);
+    }
+    const body = document.getElementById("measureCardBody");
+    if (body) {
+      body.innerHTML = `Distancia parcial: <div class="measure-big-dist">📏 ${liveTxt}</div><small style="color:var(--text-muted);">Haga clic para fijar el Punto B</small>`;
     }
   }
 
@@ -2894,3 +3015,284 @@ function downloadTextFile(content, filename, mimeType) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+/* ============================================================================
+   10. Control de Acceso (Login Seguro) y Creación / Gestión de Usuarios
+   ============================================================================ */
+function escapeHtmlStr(val) {
+  return String(val ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getStoredAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_KEY) || sessionStorage.getItem(AUTH_TOKEN_KEY) || null;
+}
+
+function saveAuthSession(token, user, remember = true) {
+  state.authToken = token;
+  state.currentUser = user;
+  const store = remember ? localStorage : sessionStorage;
+  const other = remember ? sessionStorage : localStorage;
+  other.removeItem(AUTH_TOKEN_KEY);
+  other.removeItem(AUTH_USER_KEY);
+  store.setItem(AUTH_TOKEN_KEY, token);
+  store.setItem(AUTH_USER_KEY, JSON.stringify(user || {}));
+  updateActiveUserUi();
+}
+
+function clearAuthSession() {
+  state.authToken = null;
+  state.currentUser = null;
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+  sessionStorage.removeItem(AUTH_TOKEN_KEY);
+  sessionStorage.removeItem(AUTH_USER_KEY);
+  const passEl = document.getElementById("inpLoginPass");
+  if (passEl) passEl.value = "";
+  const errEl = document.getElementById("loginErrorBox");
+  if (errEl) {
+    errEl.textContent = "";
+    errEl.classList.add("hidden");
+  }
+  document.getElementById("authLoginOverlay")?.classList.remove("hidden");
+}
+
+function updateActiveUserUi() {
+  const lbl = document.getElementById("activeUserLabel");
+  if (lbl && state.currentUser?.username) {
+    lbl.textContent = state.currentUser.username;
+  }
+}
+
+async function checkAuthAndBoot() {
+  const tok = getStoredAuthToken();
+  if (!tok) {
+    clearAuthSession();
+    return;
+  }
+  try {
+    const r = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${tok}` },
+    });
+    if (!r.ok) {
+      clearAuthSession();
+      return;
+    }
+    const data = await r.json();
+    state.authToken = tok;
+    state.currentUser = data.user || { username: "Momentum", role: "admin" };
+    updateActiveUserUi();
+    document.getElementById("authLoginOverlay")?.classList.add("hidden");
+    await startGeoAuWorkspace();
+  } catch (_) {
+    clearAuthSession();
+  }
+}
+
+function bindAuthAndUserEvents() {
+  document.getElementById("loginForm")?.addEventListener("submit", handleLoginSubmit);
+
+  document.getElementById("btnTogglePassVis")?.addEventListener("click", () => {
+    const inp = document.getElementById("inpLoginPass");
+    if (!inp) return;
+    inp.type = inp.type === "password" ? "text" : "password";
+  });
+
+  document.getElementById("btnLogout")?.addEventListener("click", handleLogout);
+  document.getElementById("btnOpenUsersModal")?.addEventListener("click", openUsersModal);
+  document.getElementById("btnCloseUsersModal")?.addEventListener("click", () => {
+    document.getElementById("usersModal")?.classList.add("hidden");
+  });
+  document.getElementById("createUserForm")?.addEventListener("submit", handleCreateUser);
+}
+
+async function handleLoginSubmit(ev) {
+  ev.preventDefault();
+  const username = (document.getElementById("inpLoginUser")?.value || "").trim();
+  const password = document.getElementById("inpLoginPass")?.value || "";
+  const remember = document.getElementById("chkRememberSession")?.checked ?? true;
+  const errBox = document.getElementById("loginErrorBox");
+  const btn = document.getElementById("btnSubmitLogin");
+
+  if (errBox) {
+    errBox.classList.add("hidden");
+    errBox.textContent = "";
+  }
+  if (btn) btn.disabled = true;
+
+  try {
+    const r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const out = await r.json();
+    if (!r.ok || !out.authenticated) {
+      if (errBox) {
+        errBox.textContent = out.detail || "Usuario o clave incorrectos.";
+        errBox.classList.remove("hidden");
+      }
+      return;
+    }
+
+    saveAuthSession(out.token, out.user, remember);
+    document.getElementById("authLoginOverlay")?.classList.add("hidden");
+    showToast(`Bienvenido, ${out.user.username}`);
+    await startGeoAuWorkspace();
+  } catch (err) {
+    if (errBox) {
+      errBox.textContent = "Error de conexión al validar credenciales.";
+      errBox.classList.remove("hidden");
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function handleLogout() {
+  ["usersModal", "methodologyModal", "guideModal", "cloudModal"].forEach((mid) => {
+    document.getElementById(mid)?.classList.add("hidden");
+  });
+  clearDistanceMeasurement();
+  clearAuthSession();
+  showToast("Sesión cerrada correctamente.");
+}
+
+async function openUsersModal() {
+  if (!state.authToken) {
+    clearAuthSession();
+    return;
+  }
+  document.getElementById("usersModal")?.classList.remove("hidden");
+  const msg = document.getElementById("userCreateMsg");
+  if (msg) msg.classList.add("hidden");
+  await loadUsersList();
+}
+
+async function loadUsersList() {
+  const wrap = document.getElementById("usersTableWrap");
+  const countBadge = document.getElementById("usersCountBadge");
+  if (!wrap) return;
+  wrap.innerHTML = "<p class='muted-note'>Cargando usuarios...</p>";
+
+  try {
+    const r = await fetch("/api/auth/users", {
+      headers: { Authorization: `Bearer ${state.authToken}` },
+    });
+    if (r.status === 401) {
+      clearAuthSession();
+      return;
+    }
+    const data = await r.json();
+    const users = data.users || [];
+    if (countBadge) countBadge.textContent = `${users.length} cuenta(s)`;
+
+    const roleLabels = {
+      admin: "Administrador",
+      geologo: "Geólogo",
+      operador: "Campo",
+      lector: "Lectura",
+    };
+
+    const rowsHtml = users
+      .map((u) => {
+        const uname = escapeHtmlStr(u.username);
+        const fname = escapeHtmlStr(u.full_name || u.username);
+        const rLbl = roleLabels[u.role] || escapeHtmlStr(u.role);
+        const cby = escapeHtmlStr(u.created_by || "Sistema");
+        const safeJsUser = JSON.stringify(String(u.username));
+        const actionCell = u.is_primary
+          ? `<span class="status-chip activo">Principal</span>`
+          : `<button type="button" class="btn-xs" style="color:#fca5a5;border-color:rgba(239,68,68,0.5);" onclick='deleteAppUser(${safeJsUser})'>🗑 Eliminar</button>`;
+        return `<tr>
+          <td><strong>${uname}</strong></td>
+          <td>${fname}</td>
+          <td><span class="pill">${rLbl}</span></td>
+          <td>${cby}</td>
+          <td>${actionCell}</td>
+        </tr>`;
+      })
+      .join("");
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Usuario</th><th>Nombre</th><th>Perfil</th><th>Creado por</th><th>Estado</th></tr>
+        </thead>
+        <tbody>${rowsHtml || "<tr><td colspan='5'>Sin usuarios registrados</td></tr>"}</tbody>
+      </table>
+    `;
+  } catch (err) {
+    wrap.innerHTML = `<p class="muted-note">Error cargando usuarios: ${escapeHtmlStr(err.message)}</p>`;
+  }
+}
+
+async function handleCreateUser(ev) {
+  ev.preventDefault();
+  const username = (document.getElementById("inpNewUsername")?.value || "").trim();
+  const fullName = (document.getElementById("inpNewFullName")?.value || "").trim();
+  const password = document.getElementById("inpNewPassword")?.value || "";
+  const role = document.getElementById("selNewUserRole")?.value || "admin";
+  const msgEl = document.getElementById("userCreateMsg");
+  const btn = document.getElementById("btnCreateUser");
+
+  if (msgEl) msgEl.classList.add("hidden");
+  if (btn) btn.disabled = true;
+
+  try {
+    const r = await fetch("/api/auth/users", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.authToken}`,
+      },
+      body: JSON.stringify({ username, password, full_name: fullName, role }),
+    });
+    const out = await r.json();
+    if (!r.ok || !out.created) {
+      if (msgEl) {
+        msgEl.textContent = out.detail || "No se pudo crear el usuario.";
+        msgEl.className = "user-create-msg err";
+      }
+      return;
+    }
+
+    if (msgEl) {
+      msgEl.textContent = `Usuario "${out.user.username}" creado. Ya puede ingresar a GeoAuV2.`;
+      msgEl.className = "user-create-msg ok";
+    }
+    document.getElementById("createUserForm")?.reset();
+    await loadUsersList();
+    showToast(`Usuario ${out.user.username} habilitado`);
+  } catch (err) {
+    if (msgEl) {
+      msgEl.textContent = "Error de red al crear el usuario.";
+      msgEl.className = "user-create-msg err";
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+window.deleteAppUser = async function (username) {
+  if (!username || username.toLowerCase() === "momentum") return;
+  try {
+    const r = await fetch(`/api/auth/users/${encodeURIComponent(username)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${state.authToken}` },
+    });
+    if (r.ok) {
+      showToast(`Usuario ${username} eliminado`);
+      await loadUsersList();
+    } else {
+      const out = await r.json();
+      showToast(out.detail || "No se pudo eliminar el usuario");
+    }
+  } catch (_) {
+    showToast("Error eliminando usuario");
+  }
+};

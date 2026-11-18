@@ -23,6 +23,14 @@ from backend.config import (
     RGB_COMPOSITES_CATALOG,
     YOLO_MINERAL_MODELS,
 )
+from backend.core.auth_manager import (
+    authenticate_user,
+    create_session_token,
+    create_user,
+    delete_user,
+    list_users,
+    verify_session_token,
+)
 from backend.core.gee_exporter import generate_gee_javascript
 from backend.core.indices import (
     INDICES_CATALOG,
@@ -61,7 +69,9 @@ from backend.core.targets_validation import (
 )
 from backend.models import (
     AnalysisRequest,
+    CreateUserRequest,
     GEEScriptRequest,
+    LoginRequest,
     MagnetometryRequest,
     ProjectSaveRequest,
 )
@@ -92,6 +102,79 @@ app.add_middleware(
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PUBLIC_DIR = os.path.join(ROOT_DIR, "public")
 ANALYSIS_GRID_SIZE = 88
+
+
+def _require_bearer_user(authorization: str | None) -> Dict[str, Any]:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Sesión requerida. Inicie sesión primero.")
+    token = authorization.split(" ", 1)[1].strip()
+    claims = verify_session_token(token)
+    if not claims:
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada.")
+    return claims
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(req: LoginRequest) -> Dict[str, Any]:
+    user = authenticate_user(req.username, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario o clave incorrectos")
+    token = create_session_token(user["username"], user.get("role", "admin"))
+    return {
+        "authenticated": True,
+        "token": token,
+        "user": user,
+    }
+
+
+@app.get("/api/auth/me")
+async def api_auth_me(authorization: str | None = Header(default=None)) -> Dict[str, Any]:
+    claims = _require_bearer_user(authorization)
+    return {
+        "authenticated": True,
+        "user": claims,
+    }
+
+
+@app.get("/api/auth/users")
+async def api_auth_list_users(authorization: str | None = Header(default=None)) -> Dict[str, Any]:
+    _require_bearer_user(authorization)
+    users = list_users()
+    return {"count": len(users), "users": users}
+
+
+@app.post("/api/auth/users")
+async def api_auth_create_user(
+    req: CreateUserRequest,
+    authorization: str | None = Header(default=None),
+) -> Dict[str, Any]:
+    claims = _require_bearer_user(authorization)
+    try:
+        new_user = create_user(
+            username=req.username,
+            password=req.password,
+            full_name=req.full_name or "",
+            role=req.role,
+            created_by=claims["username"],
+        )
+        return {"created": True, "user": new_user}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/auth/users/{username}")
+async def api_auth_delete_user(
+    username: str,
+    authorization: str | None = Header(default=None),
+) -> Dict[str, Any]:
+    _require_bearer_user(authorization)
+    try:
+        deleted = delete_user(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+    return {"deleted": True, "username": username}
 
 
 @app.get("/api/health")
